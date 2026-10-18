@@ -102,7 +102,7 @@ const command = Command.make(
 
 NodeRuntime.runMain(
   command.pipe(
-    Command.run({ version: "0.1.0" }),
+    Command.run({ version: "0.2.0" }),
     Effect.provide(NodeServices.layer)
   )
 );

@@ -1,6 +1,6 @@
 {
   "name": "@joelhooks/piper",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Piper leads your PRs to main in single file: merge-train and solo CI-triage machines.",
   "license": "MIT",

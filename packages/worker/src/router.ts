@@ -269,7 +269,7 @@ const collectionRead = Effect.fn("Router.collectionRead")(
       repo: env.REPO ?? "repository",
       solos: solos.map(soloSummary),
       trains: trains.map(trainSummary),
-      version: "0.1.0",
+      version: "0.2.0",
     });
   }
 );
@@ -345,11 +345,11 @@ const route = Effect.fn("Router.route")(function* route(
 
   if (request.method === "GET") {
     if (pathname === "/") {
-      return json({ links, name: "piper", version: "0.1.0" });
+      return json({ links, name: "piper", version: "0.2.0" });
     }
 
     if (pathname === "/health") {
-      return json({ ok: true, version: "0.1.0" });
+      return json({ ok: true, version: "0.2.0" });
     }
 
     if (pathname === "/metrics") {
