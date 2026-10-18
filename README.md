@@ -86,6 +86,26 @@ pnpm worker:plan
 
 `packages/worker/alchemy.run.ts` declares the Worker, its three Durable Object bindings, and `Config.Redacted("API_TOKEN")`. The command bundles the Worker for a browser runtime and compiles the Alchemy declaration offline using a synthetic token. It prints resource and binding names only. This dry run is not a provider diff or deployment. No account or domain is configured. Deployment requires a separately approved provider profile, a real secret, and review of the provider plan. Keep the SQLite namespaces and storage when rolling back Worker code.
 
+## Metrics
+
+`GET /metrics` derives metrics from every train and solo registered in the Depot. Reads need a bearer token only when `REQUIRE_READ_AUTH="true"`. Nothing derived is stored or fed back into a machine. The request reads each cell in sequence; it is a full-directory read, not an atomic snapshot across cells. A failed cell read fails the request rather than returning a partial total. This endpoint has no pagination or cache.
+
+`?since=<ms>` accepts a nonnegative integer Unix timestamp in milliseconds and includes facts at or after that time. Each count uses its fact's timestamp. Timing samples use the merge timestamp, but retain earlier green evidence for the same head. A window can contain a merge without its CI run, so windowed ratios need not match lifetime ratios. Invalid timestamps return 400.
+
+| Field | Definition |
+| --- | --- |
+| `prsLandedPerCiRun` | Landed cars from merge facts divided by built facts plus rerun facts. Train builds, probe builds and explicit retries each cost one run. Includes `landed`, `ciRuns` and `rate`. |
+| `greenToMergedMinutes` | Time from the latest green train verdict on the exact head to its merge. Probe verdicts, other heads and future verdicts do not qualify. |
+| `mergeToLiveMinutes` | Time from merge to the first supplied live observation for that merge SHA. The Worker has no live observations, so this has no samples there. |
+| `rebuildsByCause` | Counts for `main-moved`, `merge-refused`, `bisected` and `conflict`. |
+| `culpritsPerBisect` | Culprit drop facts divided by bisect decisions. A judged fact starts a bisect unless a rerun fact has the same head and timestamp. Missing judges still count. Unfinished bisects stay in the denominator. |
+| `solo.outcomes` | Counts of the seven recorded solo outcomes. Attempts and judgments are not outcomes. |
+| `solo.checks` | Sorted check names, attempt counts by `original`, `rerun` and `baseline`, outcome counts, and `flakeRate`. The rate is flake outcomes divided by all recorded outcomes naming that check, including unknown, dismissed and superseded outcomes. Pending triage has no outcome denominator. Duplicate names within one outcome count once. This is a triage-outcome rate, not a claim about all CI executions. |
+
+Timing summaries contain `samples`, `median` and `p90`. The median averages the middle pair for even populations. P90 uses the nearest rank. Missing timing samples and zero-denominator rates are `null`, not zero. A merged train without a green verdict still contributes landed cars, but no green-to-merged sample.
+
+`@joelhooks/piper/metrics` exports the pure `metrics(trains, solos, options?)` function. Each input collection contains fact arrays, one per train or solo. Options accept `since` and optional `liveAt: [{ mergeSha, at }]` observations. `trainMetrics`, `soloMetrics` and `summarizeMetrics` support per-cell projection and aggregation without transporting entire ledgers. Machines remain the only writers of ledger facts.
+
 ## Tests and development fence
 
 The property suites generate event traces and check the rules at each step. They cover the car cap, exact-head green plus GO, bisect progress, main movement, retry accounting, attempt retention, and owner notifications. Both suites compare an uninterrupted run with a JSON snapshot restored at an arbitrary cut. The solo suite also drops and scrambles judge calls and compares outcomes, attempt facts, and intents. Both suites replay generated traces while rendering notifications with arbitrary decodable vocabularies and verify unchanged machine state, intents, and facts. Fixed-seed coverage checks verify that generated traces reach the outcomes they claim to test. All fixtures use synthetic contributors, revisions, checks, and pull-request numbers.

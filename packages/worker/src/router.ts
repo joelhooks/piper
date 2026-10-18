@@ -14,6 +14,7 @@ import { Clock, Effect, Predicate, Schema } from "effect";
 import { Auth } from "./auth.js";
 import type { Settings } from "./bindings.js";
 import { decode, json, readJson, refuse, stampedBody } from "./http.js";
+import { readMetrics } from "./metrics.js";
 import { forward } from "./transport.js";
 
 const names = (value = "") =>
@@ -319,6 +320,7 @@ const cellRoute = Effect.fn("Router.cellRoute")(function* cellRoute(
 });
 
 const links = {
+  metrics: "GET /metrics?since=<ms>",
   operator: "POST /solos/:key/operator",
   solo: "GET /solos/:key",
   soloEvents: "GET|POST /solos/:key/events",
@@ -348,6 +350,10 @@ const route = Effect.fn("Router.route")(function* route(
 
     if (pathname === "/health") {
       return json({ ok: true, version: "0.1.0" });
+    }
+
+    if (pathname === "/metrics") {
+      return yield* readMetrics(request);
     }
 
     if (["/trains", "/solos", "/state"].includes(pathname)) {

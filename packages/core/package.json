@@ -11,6 +11,7 @@
   },
   "type": "module",
   "exports": {
+    "./metrics": "./src/metrics.ts",
     "./vocabulary": "./src/vocabulary.ts",
     "./domain": "./src/domain.ts",
     "./policy": "./src/policy.ts",

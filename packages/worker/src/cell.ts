@@ -13,6 +13,7 @@ import {
   stepTrain,
   viewTrain,
 } from "@joelhooks/piper/host";
+import { soloMetrics, trainMetrics } from "@joelhooks/piper/metrics";
 import {
   openSolo,
   readSolo,
@@ -23,6 +24,7 @@ import { Clock, Effect, Result, Schema } from "effect";
 
 import { Auth } from "./auth.js";
 import { decode, json, refuse, respond, stampedBody } from "./http.js";
+import { metricsOptions } from "./metrics.js";
 import { restoreSnapshot } from "./snapshot.js";
 import { Storage } from "./storage.js";
 import type { Document } from "./storage.js";
@@ -101,6 +103,19 @@ const save = Effect.fn("Cell.save")(function* save(
   return kind === "solo" ? { ...view, operator: document.notes } : view;
 });
 
+const measurements = Effect.fn("Cell.measurements")(function* measurements(
+  kind: Kind,
+  encoded: string,
+  request: Request
+) {
+  const options = yield* metricsOptions(request);
+  const snapshot = yield* restoreSnapshot(encoded);
+
+  return kind === "train"
+    ? trainMetrics((yield* readTrain(snapshot)).context.facts, options)
+    : soloMetrics((yield* readSolo(snapshot)).context.facts, options);
+});
+
 const Note = Schema.Struct({
   action: Schema.NonEmptyString,
   at: Schema.Int,
@@ -137,6 +152,10 @@ const cellHandle = Effect.fn("Cell.handle")(function* cellHandle(
 
   if (document.snapshot === undefined) {
     return refuse(404, "not-found");
+  }
+
+  if (path === "/metrics" && request.method === "GET") {
+    return json(yield* measurements(kind, document.snapshot, request));
   }
 
   if (path === "/state" && request.method === "GET") {
