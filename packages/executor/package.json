@@ -1,0 +1,31 @@
+{
+  "name": "@joelhooks/piper-executor",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "piper-executor": "./bin/piper-executor"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/drain.ts",
+    "./acceptance": "./src/index.ts",
+    "./domain": "./src/domain.ts",
+    "./execute": "./src/execute.ts",
+    "./github": "./src/github.ts",
+    "./journal": "./src/journal.ts",
+    "./outbox": "./src/worker.ts",
+    "./recorder": "./src/recorder.ts",
+    "./settings": "./src/services.ts",
+    "./token": "./src/token.ts",
+    "./transport": "./src/transport.ts",
+    "./writes": "./src/writes.ts"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.0",
+    "@joelhooks/piper": "workspace:*",
+    "@xstate/effect": "0.1.0-alpha.7",
+    "effect": "4.0.0",
+    "tsx": "4.23.15",
+    "xstate": "6.0.0-alpha.66"
+  }
+}

@@ -62,7 +62,7 @@
     "allowImportingTsExtensions": true,
     "allowJs": true
   },
-  "exclude": ["packages/*/test/**"],
+  "exclude": ["packages/*/test/**", "packages/executor/**"],
   "include": [
     "packages/**/*.ts",
     "scripts/**/*.ts",

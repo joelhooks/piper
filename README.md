@@ -106,6 +106,46 @@ Timing summaries contain `samples`, `median` and `p90`. The median averages the 
 
 `@joelhooks/piper/metrics` exports the pure `metrics(trains, solos, options?)` function. Each input collection contains fact arrays, one per train or solo. Options accept `since` and optional `liveAt: [{ mergeSha, at }]` observations. `trainMetrics`, `soloMetrics` and `summarizeMetrics` support per-cell projection and aggregation without transporting entire ledgers. Machines remain the only writers of ledger facts.
 
+## Executor
+
+`packages/executor` is the private `@joelhooks/piper-executor` package. It drains train and solo outboxes through Effect service Layers. The machines remain the only decision-makers. Its XState lifecycle recovers durable claims, drains once, and finishes. The CLI repeats this lifecycle every 30 seconds.
+
+```sh
+pnpm executor --repo sample/project --api https://worker.invalid --mode dry-run
+```
+
+`dry-run` is the default. GitHub requests use GET only. No live write Layer is constructed. A proposed write appends a `would-do` entry to the journal, containing `{ intentId, kind, repo, head, wouldDo }`. The head is an exact SHA from the intent or the observed machine state. `wouldDo` lists HTTP methods, provider paths, and request bodies. A proposed build records the base SHA and each car SHA; it never invents a resulting merge SHA. Dry-run does not fabricate `built`, `prOpened`, or `merged` events.
+
+Read-derived check observations and advisory judge failures still go back to the Worker using authenticated event POSTs. **This means dry-run is read-only against GitHub, not against Piper.** Use a separate shadow Worker if its authoritative machine must remain untouched. Compare the journal with the human operator's actions. This package has not been qualified against a real GitHub repository.
+
+### Configuration and ports
+
+- `GITHUB_TOKEN`: a short-lived installation token. `PIPER_GITHUB_TOKEN_EXPIRES_AT` declares its expiration as epoch milliseconds. Empty, expired, undeclared, or over-one-hour leases fail closed. The supplied Layer rechecks expiry on every GitHub call. Restart with a fresh lease when it expires; a custom `TokenProvider` Layer can renew leases per call. No private key or token is persisted or logged.
+- `PIPER_API_TOKEN`: the Worker's bearer token. Keep this separate from the GitHub token.
+- `--state`: journal directory, default `.piper-executor` inside the executor package when using `pnpm executor`. That default is ignored by Git. Explicit state paths need equivalent protection. Use one writer per directory and preserve this directory across restarts and mode changes.
+- `--read-interval-ms`: minimum spacing between provider requests, default 1000. Calls serialize, including bursts. A 403 or 429 delays subsequent requests by the greater of 60 seconds and `Retry-After` seconds. Failed writes are never automatically retried.
+- `--base-branch`: target branch for train PRs, default `main`. The intent's base SHA remains the build input; it is not a branch name.
+- `PIPER_BASELINE_WORKFLOWS`: JSON mapping from check names to workflow filenames, such as `{"unit":"unit.yml"}`. Completed checks on the exact base are reused. Otherwise the executor creates an exact-base branch and dispatches configured workflows there. Missing mappings fail closed. The baseline branch remains for operator cleanup. Polls of a solo's base SHA emit `baseline`, not patch-head `checks`.
+- `GitHub`, `GitHubWrites`, `TokenProvider`, `Transport`, `Recorder`, `Journal`, `Outbox`, and advisory `Judge` are replaceable ports. Effect's `Clock` owns time. The default Judge is absent and emits `rankFailed`; it cannot grant merge authority. Provider responses pass through schemas. Check reads paginate up to 1000 checks and refuse incomplete observations; workflow run reads refuse more than 100 results. Worker reads refuse over 1000 cells or 10,000 intents per cell. These are conservative, unmeasured safety bounds, not measured capacity claims.
+
+`--mode live` explicitly constructs the live write Layer. It builds only reserved `train/<number>` branches with refs and REST merges, opens draft PRs, reruns workflows or named check runs, dispatches baselines, edits labels, comments, closes PRs, and merges with the tested `sha` precondition. Marking a draft ready uses GitHub's GraphQL mutation because REST does not expose that operation. A changed head or a refused guarded merge produces `mergeRefused`. No live mode invocation is authorized by the default dry-run command.
+
+### Claims, outcomes, and recovery
+
+The append-only `journal.jsonl` is the authority for executor progress. It is separate from the machines' authoritative outboxes and ledgers. Every record is schema-validated and fsynced. A stable identity combines repo, machine kind, target, and intent ID. `claimed` is persisted **before** execution; `settled` stores exactly one execution outcome: `done`, `failed` with a typed error, or `recorded-would-do`. The set of durable claims is the cursor. New reads may include old outbox rows, but those rows never execute again.
+
+A recovered claim without a settlement becomes a typed `interrupted` failure. It is never replayed, even if the provider may have accepted it before the crash. This is at-most-once execution, not a promise of distributed exactly-once delivery. An interruption can require manual provider reconciliation and a new machine intent. Defects remain defects during the running invocation.
+
+Events are saved with the outcome before delivery. `delivering` is persisted before the Worker POST, and `delivered` after success. A crash or ambiguous response between those records leaves an **unconfirmed delivery**, not permission to POST again. Inspect those entries and the Worker's event history before reconciling manually. The current Worker API has no intent-ID delivery receipt, so automatic exactly-once event delivery is not available.
+
+The file adapter holds an exclusive `writer.lock` containing `{ pid, startedAt, cursor }`, with no hostname. `cursor` is the last settled intent ID observed when the writer acquired its lock. A graceful stop releases it. A refused restart prints those holder fields and the exact lock path. After an ungraceful stop, verify that the named process is dead, then remove only that lock before restarting. Never delete, truncate, or replace the journal to clear a lock. A malformed or over-32-MiB journal stops execution for operator inspection. File fsyncs cover process-crash recovery; power-loss and remote-filesystem durability remain unqualified.
+
+Changing from dry-run to live does not replay previously recorded proposals. Use the same claims and reconcile the shadow run before cutover. Start live only with explicit authorization and reconciled outbox history. Roll back by stopping the executor or returning to dry-run while preserving its journal. No deployment or GitHub write is needed to test this package.
+
+### Landed credit
+
+A CI pass is an observation, never landed plan credit. `OperatorAcceptanceSchema` accepts explicit operator facts `{ kind: "operator-acceptance", by, at, nodes }`; `landedNodes` derives only those accepted node IDs. An operator may supply those IDs when posting a plan event. The executor never emits GO, plan acceptance, or landed-credit facts from a check result or a provider merge response.
+
 ## Tests and development fence
 
 The property suites generate event traces and check the rules at each step. They cover the car cap, exact-head green plus GO, bisect progress, main movement, retry accounting, attempt retention, and owner notifications. Both suites compare an uninterrupted run with a JSON snapshot restored at an arbitrary cut. The solo suite also drops and scrambles judge calls and compares outcomes, attempt facts, and intents. Both suites replay generated traces while rendering notifications with arbitrary decodable vocabularies and verify unchanged machine state, intents, and facts. Fixed-seed coverage checks verify that generated traces reach the outcomes they claim to test. All fixtures use synthetic contributors, revisions, checks, and pull-request numbers.
