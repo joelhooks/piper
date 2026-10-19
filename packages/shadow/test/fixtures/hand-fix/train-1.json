@@ -1,0 +1,611 @@
+{
+  "version": 1,
+  "input": {
+    "repo": "sample/project",
+    "train": 1,
+    "trainLabel": "train",
+    "maxCars": 3,
+    "pollMs": 60000,
+    "ciTimeoutMs": 1800000,
+    "ignoredChecks": []
+  },
+  "since": "2026-01-01T00:00:00Z",
+  "frames": [
+    {
+      "at": 1767225600000,
+      "events": [
+        {
+          "_tag": "candidates",
+          "main": "main-a",
+          "candidates": [
+            {
+              "number": 1,
+              "headSha": "car-a",
+              "owner": "synthetic-author",
+              "checks": [
+                {
+                  "name": "unit",
+                  "headSha": "car-a",
+                  "status": "completed",
+                  "conclusion": "success"
+                }
+              ],
+              "labels": ["train"],
+              "operatorReviewed": true,
+              "upToDate": true
+            },
+            {
+              "number": 2,
+              "headSha": "car-b",
+              "owner": "synthetic-author",
+              "checks": [
+                {
+                  "name": "unit",
+                  "headSha": "car-b",
+                  "status": "completed",
+                  "conclusion": "success"
+                }
+              ],
+              "labels": ["train"],
+              "operatorReviewed": true,
+              "upToDate": true
+            },
+            {
+              "number": 3,
+              "headSha": "car-c",
+              "owner": "synthetic-author",
+              "checks": [
+                {
+                  "name": "unit",
+                  "headSha": "car-c",
+                  "status": "completed",
+                  "conclusion": "success"
+                }
+              ],
+              "labels": ["train"],
+              "operatorReviewed": true,
+              "upToDate": true
+            }
+          ],
+          "at": 1767225600000
+        }
+      ],
+      "reads": [
+        {
+          "repo": "sample/project",
+          "path": "/git/ref/heads/train%2F1",
+          "value": {
+            "object": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/pulls/4",
+          "value": {
+            "number": 4,
+            "node_id": "synthetic-node",
+            "head": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/actions/runs?head_sha=train-head&per_page=100",
+          "value": {
+            "total_count": 1,
+            "workflow_runs": [
+              {
+                "id": 8,
+                "check_suite_id": 9,
+                "run_attempt": 1
+              }
+            ]
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/commits/train-head/check-runs?filter=latest&per_page=100&page=1",
+          "value": {
+            "total_count": 1,
+            "check_runs": [
+              {
+                "name": "unit",
+                "headSha": "train-head",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "train-head",
+                "check_suite": {
+                  "id": 9
+                }
+              }
+            ]
+          },
+          "missing": false
+        }
+      ]
+    },
+    {
+      "at": 1767225660000,
+      "events": [
+        {
+          "_tag": "depart",
+          "at": 1767225660000
+        }
+      ],
+      "reads": [
+        {
+          "repo": "sample/project",
+          "path": "/git/ref/heads/train%2F1",
+          "value": {
+            "object": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/pulls/4",
+          "value": {
+            "number": 4,
+            "node_id": "synthetic-node",
+            "head": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/actions/runs?head_sha=train-head&per_page=100",
+          "value": {
+            "total_count": 1,
+            "workflow_runs": [
+              {
+                "id": 8,
+                "check_suite_id": 9,
+                "run_attempt": 1
+              }
+            ]
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/commits/train-head/check-runs?filter=latest&per_page=100&page=1",
+          "value": {
+            "total_count": 1,
+            "check_runs": [
+              {
+                "name": "unit",
+                "headSha": "train-head",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "train-head",
+                "check_suite": {
+                  "id": 9
+                }
+              }
+            ]
+          },
+          "missing": false
+        }
+      ]
+    },
+    {
+      "at": 1767225720000,
+      "events": [
+        {
+          "_tag": "built",
+          "buildId": 1,
+          "conflicted": [],
+          "head": "train-head",
+          "merged": [1, 2, 3],
+          "at": 1767225720000
+        }
+      ],
+      "reads": [
+        {
+          "repo": "sample/project",
+          "path": "/git/ref/heads/train%2F1",
+          "value": {
+            "object": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/pulls/4",
+          "value": {
+            "number": 4,
+            "node_id": "synthetic-node",
+            "head": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/actions/runs?head_sha=train-head&per_page=100",
+          "value": {
+            "total_count": 1,
+            "workflow_runs": [
+              {
+                "id": 8,
+                "check_suite_id": 9,
+                "run_attempt": 1
+              }
+            ]
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/commits/train-head/check-runs?filter=latest&per_page=100&page=1",
+          "value": {
+            "total_count": 1,
+            "check_runs": [
+              {
+                "name": "unit",
+                "headSha": "train-head",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "train-head",
+                "check_suite": {
+                  "id": 9
+                }
+              }
+            ]
+          },
+          "missing": false
+        }
+      ]
+    },
+    {
+      "at": 1767225780000,
+      "events": [
+        {
+          "_tag": "prOpened",
+          "pr": 4,
+          "at": 1767225780000
+        }
+      ],
+      "reads": [
+        {
+          "repo": "sample/project",
+          "path": "/git/ref/heads/train%2F1",
+          "value": {
+            "object": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/pulls/4",
+          "value": {
+            "number": 4,
+            "node_id": "synthetic-node",
+            "head": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/actions/runs?head_sha=train-head&per_page=100",
+          "value": {
+            "total_count": 1,
+            "workflow_runs": [
+              {
+                "id": 8,
+                "check_suite_id": 9,
+                "run_attempt": 1
+              }
+            ]
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/commits/train-head/check-runs?filter=latest&per_page=100&page=1",
+          "value": {
+            "total_count": 1,
+            "check_runs": [
+              {
+                "name": "unit",
+                "headSha": "train-head",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "train-head",
+                "check_suite": {
+                  "id": 9
+                }
+              }
+            ]
+          },
+          "missing": false
+        }
+      ]
+    },
+    {
+      "at": 1767225840000,
+      "events": [
+        {
+          "_tag": "tick",
+          "at": 1767225840000
+        }
+      ],
+      "reads": [
+        {
+          "repo": "sample/project",
+          "path": "/git/ref/heads/train%2F1",
+          "value": {
+            "object": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/pulls/4",
+          "value": {
+            "number": 4,
+            "node_id": "synthetic-node",
+            "head": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/actions/runs?head_sha=train-head&per_page=100",
+          "value": {
+            "total_count": 1,
+            "workflow_runs": [
+              {
+                "id": 8,
+                "check_suite_id": 9,
+                "run_attempt": 1
+              }
+            ]
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/commits/train-head/check-runs?filter=latest&per_page=100&page=1",
+          "value": {
+            "total_count": 1,
+            "check_runs": [
+              {
+                "name": "unit",
+                "headSha": "train-head",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "train-head",
+                "check_suite": {
+                  "id": 9
+                }
+              }
+            ]
+          },
+          "missing": false
+        }
+      ]
+    },
+    {
+      "at": 1767225900000,
+      "events": [
+        {
+          "_tag": "go",
+          "head": "train-head",
+          "by": "synthetic-operator",
+          "at": 1767225900000
+        }
+      ],
+      "reads": [
+        {
+          "repo": "sample/project",
+          "path": "/git/ref/heads/train%2F1",
+          "value": {
+            "object": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/pulls/4",
+          "value": {
+            "number": 4,
+            "node_id": "synthetic-node",
+            "head": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/actions/runs?head_sha=train-head&per_page=100",
+          "value": {
+            "total_count": 1,
+            "workflow_runs": [
+              {
+                "id": 8,
+                "check_suite_id": 9,
+                "run_attempt": 1
+              }
+            ]
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/commits/train-head/check-runs?filter=latest&per_page=100&page=1",
+          "value": {
+            "total_count": 1,
+            "check_runs": [
+              {
+                "name": "unit",
+                "headSha": "train-head",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "train-head",
+                "check_suite": {
+                  "id": 9
+                }
+              }
+            ]
+          },
+          "missing": false
+        }
+      ]
+    },
+    {
+      "at": 1767225960000,
+      "events": [
+        {
+          "_tag": "merged",
+          "head": "train-head",
+          "mergeSha": "merged-head",
+          "at": 1767225960000
+        }
+      ],
+      "reads": [
+        {
+          "repo": "sample/project",
+          "path": "/git/ref/heads/train%2F1",
+          "value": {
+            "object": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/pulls/4",
+          "value": {
+            "number": 4,
+            "node_id": "synthetic-node",
+            "head": {
+              "sha": "train-head"
+            }
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/actions/runs?head_sha=train-head&per_page=100",
+          "value": {
+            "total_count": 1,
+            "workflow_runs": [
+              {
+                "id": 8,
+                "check_suite_id": 9,
+                "run_attempt": 1
+              }
+            ]
+          },
+          "missing": false
+        },
+        {
+          "repo": "sample/project",
+          "path": "/commits/train-head/check-runs?filter=latest&per_page=100&page=1",
+          "value": {
+            "total_count": 1,
+            "check_runs": [
+              {
+                "name": "unit",
+                "headSha": "train-head",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "train-head",
+                "check_suite": {
+                  "id": 9
+                }
+              }
+            ]
+          },
+          "missing": false
+        }
+      ]
+    }
+  ],
+  "trace": {
+    "complete": true,
+    "acceptances": [
+      {
+        "head": "train-head",
+        "fact": {
+          "kind": "operator-acceptance",
+          "at": 1767226020000,
+          "by": "synthetic-operator",
+          "nodes": ["slice-a", "slice-b", "slice-c"]
+        }
+      }
+    ],
+    "actions": [
+      {
+        "slot": 0,
+        "kind": "BuildTrain",
+        "source": "synthetic:operator-log",
+        "at": 1767225600000,
+        "head": "main-a",
+        "cars": ["car-a", "manual-fix", "car-c"],
+        "members": [1, 2, 3]
+      },
+      {
+        "slot": 1,
+        "kind": "OpenTrainPr",
+        "source": "synthetic:operator-log",
+        "at": 1767225660000,
+        "head": "train-head",
+        "cars": ["car-a", "car-b", "car-c"],
+        "members": [1, 2, 3]
+      },
+      {
+        "slot": 2,
+        "kind": "MarkReady",
+        "source": "synthetic:operator-log",
+        "at": 1767225720000,
+        "head": "train-head",
+        "prs": [4]
+      },
+      {
+        "slot": 3,
+        "kind": "Merge",
+        "source": "synthetic:operator-log",
+        "at": 1767225780000,
+        "head": "train-head",
+        "prs": [4],
+        "mergeSha": "merged-head"
+      },
+      {
+        "slot": 4,
+        "kind": "RemoveLabels",
+        "source": "synthetic:operator-log",
+        "at": 1767225840000,
+        "head": "train-head",
+        "prs": [1, 2, 3, 4],
+        "label": "train"
+      }
+    ]
+  }
+}

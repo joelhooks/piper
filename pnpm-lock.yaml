@@ -89,6 +89,30 @@ importers:
         specifier: 6.0.0-alpha.66
         version: 6.0.0-alpha.66
 
+  packages/shadow:
+    dependencies:
+      '@effect/platform-node':
+        specifier: 4.0.0
+        version: 4.0.0(effect@4.0.0)(redis@6.3.0)
+      '@joelhooks/piper':
+        specifier: workspace:*
+        version: link:../core
+      '@joelhooks/piper-executor':
+        specifier: workspace:*
+        version: link:../executor
+      '@xstate/effect':
+        specifier: 0.1.0-alpha.7
+        version: 0.1.0-alpha.7(effect@4.0.0)(xstate@6.0.0-alpha.66)
+      effect:
+        specifier: 4.0.0
+        version: 4.0.0
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
+      xstate:
+        specifier: 6.0.0-alpha.66
+        version: 6.0.0-alpha.66
+
   packages/worker:
     dependencies:
       '@joelhooks/piper':

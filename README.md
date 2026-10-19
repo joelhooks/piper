@@ -227,6 +227,19 @@ Changing from dry-run to live does not replay previously recorded proposals. Use
 
 A CI pass or an `accepted` Release health result is an observation, never landed plan credit. `OperatorAcceptanceSchema` accepts explicit operator facts `{ kind: "operator-acceptance", by, at, nodes }`; `landedNodes` derives only those accepted node IDs. An operator may supply those IDs when posting a plan event. The executor never emits GO, plan acceptance, or landed-credit facts from a check result or a provider merge response.
 
+## Shadow
+
+`packages/shadow` is the private `@joelhooks/piper-shadow` package. It runs the train host and executor in-process, always in dry-run, and compares the executor's recorded operations with an operator trace. It has no live writer. `GitHubFeed` reads candidates and exact-head checks. `OperatorTrace` accepts GitHub observations and additional private adapters. The pure comparator preserves source conflicts and reports missing, extra, different-head, different-car, and ordering differences.
+
+```sh
+pnpm shadow --repo sample/project --since 2026-01-01T00:00:00Z \
+  --replay ../../packages/shadow/test/fixtures/clean
+```
+
+Replay needs no token and never calls GitHub. Live observation uses `--record <new-private-directory>` outside every Git checkout. Requests default to at least two seconds apart; 403/429 responses trigger bounded backoff. `--min-rate-fraction` defaults to `0.2`. A low shared rate budget stops the process with a nonzero exit and saves successful reads so far. Tokens come only from the environment and are never recorded.
+
+A merge alone does not count as acceptance. A matching train needs a separate head-bound input containing the executor's `OperatorAcceptanceSchema`, complete operator history, and matching actions. Otherwise it remains `pending` or reports a `diff`. Three synthetic matching scenarios are tests, not evidence of three real matching trains. See [the shadow contract](packages/shadow/README.md) for recording, source provenance, explicit GO/plan inputs, and the limits of GitHub history.
+
 ## Tests and development fence
 
 The property suites generate event traces and check the rules at each step. They cover the car cap, exact-head green plus GO, bisect progress, main movement, retry accounting, attempt retention, and owner notifications. Both suites compare an uninterrupted run with a JSON snapshot restored at an arbitrary cut. The solo suite also drops and scrambles judge calls and compares outcomes, attempt facts, and intents. Both suites replay generated traces while rendering notifications with arbitrary decodable vocabularies and verify unchanged machine state, intents, and facts. Fixed-seed coverage checks verify that generated traces reach the outcomes they claim to test. All fixtures use synthetic contributors, revisions, checks, and pull-request numbers.
