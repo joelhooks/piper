@@ -7,6 +7,7 @@ import { ExecutorError } from "./domain.js";
 import type { Event, Job, Outcome, Write } from "./domain.js";
 import { GitHub } from "./github.js";
 import { Recorder } from "./recorder.js";
+import { executeRelease } from "./release.js";
 import type { Settings } from "./services.js";
 import { GitHubWrites } from "./writes.js";
 
@@ -714,6 +715,10 @@ export const execute = Effect.fn("Executor.execute")(function* execute(
   job: Job,
   settings: Settings
 ) {
+  if (Predicate.isTagged(job, "release")) {
+    return yield* executeRelease(job, settings);
+  }
+
   const at = yield* Clock.currentTimeMillis;
 
   return yield* (

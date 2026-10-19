@@ -106,9 +106,48 @@ Timing summaries contain `samples`, `median` and `p90`. The median averages the 
 
 `@joelhooks/piper/metrics` exports the pure `metrics(trains, solos, options?)` function. Each input collection contains fact arrays, one per train or solo. Options accept `since` and optional `liveAt: [{ mergeSha, at }]` observations. `trainMetrics`, `soloMetrics` and `summarizeMetrics` support per-cell projection and aggregation without transporting entire ledgers. Machines remain the only writers of ledger facts.
 
+## Release
+
+Release owns a separate authority for an accepted main commit moving to production. Train and Solo behavior stays unchanged. `@joelhooks/piper/release-domain` exports the input, plan, expectation, intent, event, and fact schemas. `release-policy` exports the pure expectation checker and runway predicate. `release` exports the machine. `release-host` exports `openRelease`, `stepRelease`, `readRelease`, and `viewRelease`; hosts restore actors with `createEffectActor`, not transition replay.
+
+The lifecycle is `planned → expectationCheck → review → armed → fired → observing → accepted`, or `restoring → restored`. Policy mismatches, unavailable review, review holds, and failed restoration finish `held`. An operator can `reject` before deployment. Each state transition appends a fact. Rejected, stale, or irrelevant events do not grant authority.
+
+`ReleaseInputSchema` requires a unique `runId`, `target`, `previousTarget`, opening time `at`, `expectation`, `docs: { spec, diff }`, nonempty named `checks`, positive `observationTimeoutMs`, `minimumRunwayMs`, `windowEndsAt`, `blackoutUntil`, and `allowAbsentReview`. Times are nonnegative epoch milliseconds. Supply window and blackout facts using `window { at, windowEndsAt, blackoutUntil }`. Event times must not precede the last accepted fact. The host must authenticate operator and reviewer identities and supply trusted clock facts.
+
+Opening emits `PlanRelease { target }`. Post `planned { at, rows }` after obtaining the plan. The pure checker holds any stop row or unmatched row, preserving offending rows. A passing plan emits `RequestReview { runId, plan, docs }`. The review port submits this payload asynchronously; its private adapter later posts `reviewed { at, verdict: "approve" | "hold", by }`. No reviewer means `reviewUnavailable`, which holds by default. Explicit `allowAbsentReview: true` permits arming without a reviewer, records that absence, and never creates an approval verdict.
+
+Only an explicit `fire { at, by }` in `armed` can emit `Deploy { target }`. Fire checks that `at >= blackoutUntil` and `windowEndsAt - at >= minimumRunwayMs`, including equality. Approval, ticks, and window updates cannot fire. A restored snapshot never re-emits deployment. After `deployed { at }`, the machine emits `Observe { checks, deadlineAt }` and sets its deadline. Named `observed { at, check, outcome: "pass" | "fail" | "unknown" }` events all need to pass before the deadline. Any failure, or a `tick` at or past the deadline with incomplete checks, emits `Restore { to: previousTarget }`. The host must schedule the deadline reported by `viewRelease.alarmAt`. Unknown is never healthy. `restored` finishes recovery; `failed { operation: "Restore", reason, at }` holds. Deployment failure starts recovery; planning failure holds. Commands and restoration strategy belong to adapters, not the machine.
+
+### Plan and expectation JSON
+
+Plans are arrays of opaque records. Map private provider output into this public shape before posting it:
+
+```json
+[
+  { "id": "resource-a", "kind": "resource", "action": "update" },
+  { "id": "value-a", "kind": "computed", "action": "read" },
+  { "id": "output-a", "kind": "deferred", "action": "read" }
+]
+```
+
+```json
+{
+  "allowed": [
+    { "kind": "resource", "action": "update" },
+    { "kind": "computed" },
+    { "idPrefix": "output-", "kind": "deferred" }
+  ],
+  "stop": [{ "action": "delete" }]
+}
+```
+
+A matcher may contain `id`, `idPrefix`, `kind`, and `action`. Supplied fields are conjunctive; strings compare exactly, except `idPrefix`. Allowed matchers form a union. Stop wins even when allowed also matches. An empty matcher `{}` explicitly matches every row; an empty allowed list permits no rows. No provider-specific meaning is attached to any field.
+
+The private fixture harness reads `PIPER_RELEASE_FIXTURES`, a directory containing `plan.json` and `expectation.json` in these shapes. The captured plan must include at least one stop row; all other rows must pass. The harness proves the full plan holds and the plan without stop rows reaches review. It skips with a clear message when the variable is unset. Keep the directory outside the repository; nothing copies or persists its contents. Run it with `PIPER_RELEASE_FIXTURES=/private/fixtures pnpm exec vitest run packages/executor/test/release-private-fixtures.test.ts`.
+
 ## Executor
 
-`packages/executor` is the private `@joelhooks/piper-executor` package. It drains train and solo outboxes through Effect service Layers. The machines remain the only decision-makers. Its XState lifecycle recovers durable claims, drains once, and finishes. The CLI repeats this lifecycle every 30 seconds.
+`packages/executor` is the private `@joelhooks/piper-executor` package. It drains train, solo, and release jobs through Effect service Layers. The machines remain the only decision-makers. Its XState lifecycle recovers durable claims, drains once, and finishes. The CLI repeats this lifecycle every 30 seconds.
 
 ```sh
 pnpm executor --repo sample/project --api https://worker.invalid --mode dry-run
@@ -132,6 +171,25 @@ Read-derived check observations and advisory judge failures still go back to the
 
 `--mode live` explicitly constructs the live write Layer. It builds only reserved `train/<number>` branches with refs and REST merges, opens draft PRs, reruns workflows or named check runs, dispatches baselines, edits labels, comments, closes PRs, and merges with the tested `sha` precondition. Marking a draft ready uses GitHub's GraphQL mutation because REST does not expose that operation. A changed head or a refused guarded merge produces `mergeRefused`. No live mode invocation is authorized by the default dry-run command.
 
+### Release commands and review
+
+`PIPER_RELEASE_COMMANDS` configures named commands as JSON, for example:
+
+```json
+{
+  "PlanRelease": { "command": "release-plan", "args": [] },
+  "Deploy": { "command": "release-apply", "args": [] },
+  "Restore": { "command": "release-restore", "args": [] },
+  "Observe:availability": { "command": "release-check", "args": [] }
+}
+```
+
+Plan and deploy append `["--target", target]`; restore appends `["--target", to]`; each named observation appends `["--check", check]`. The executor passes a command name and literal argv with `shell: false`. It never turns row values into a shell command or command arguments. Missing mappings fail closed. Plan stdout must be a JSON row array. Check stdout must be `{ "outcome": "pass" | "fail" | "unknown" }`. A nonzero exit or malformed check response is unknown, not pass. The observation deadline interrupts a hung check and prevents later checks from starting after the deadline. Deploy and restore require zero exit status before emitting their completion events. The executor never retries commands automatically.
+
+Release dry-run executes no commands, constructs no live command Layer, submits no review job, and fabricates no release events. Its journal records each command name and argv using `wouldDo` entries with `path: command`, `method: "POST"`, and `body: { args }`. Review proposals use `path: "RequestReview"` and the complete submission payload. Live commands require the existing exact repository admission gate. The CLI constructs the Node spawner only in live mode. `ReleaseCommandConfig`, `ReleaseCommands`, and `ReleaseReviewer` are replaceable ports. The default reviewer is absent; a private adapter implements asynchronous submission and separately posts a schema-checked verdict. No customer adapter or doctrine ships here.
+
+Release jobs use `_tag: "release"` and the same journal claim identity and delivery protocol as other machines. A host supplies these jobs through `Outbox` and translates tagged posted events with `toReleaseEvent`. This change adds no Release routes to the existing Worker. A private or future public host must own storage, routing, trusted clocks, review callbacks, and operator authentication before enabling release execution.
+
 ### Claims, outcomes, and recovery
 
 The append-only `journal.jsonl` is the authority for executor progress. It is separate from the machines' authoritative outboxes and ledgers. Every record is schema-validated and fsynced. A stable identity combines repo, machine kind, target, and intent ID. `claimed` is persisted **before** execution; `settled` stores exactly one execution outcome: `done`, `failed` with a typed error, or `recorded-would-do`. The set of durable claims is the cursor. New reads may include old outbox rows, but those rows never execute again.
@@ -146,7 +204,7 @@ Changing from dry-run to live does not replay previously recorded proposals. Use
 
 ### Landed credit
 
-A CI pass is an observation, never landed plan credit. `OperatorAcceptanceSchema` accepts explicit operator facts `{ kind: "operator-acceptance", by, at, nodes }`; `landedNodes` derives only those accepted node IDs. An operator may supply those IDs when posting a plan event. The executor never emits GO, plan acceptance, or landed-credit facts from a check result or a provider merge response.
+A CI pass or an `accepted` Release health result is an observation, never landed plan credit. `OperatorAcceptanceSchema` accepts explicit operator facts `{ kind: "operator-acceptance", by, at, nodes }`; `landedNodes` derives only those accepted node IDs. An operator may supply those IDs when posting a plan event. The executor never emits GO, plan acceptance, or landed-credit facts from a check result or a provider merge response.
 
 ## Tests and development fence
 

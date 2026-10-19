@@ -6,6 +6,10 @@ import {
   PrNumber,
   Sha,
 } from "@joelhooks/piper/domain";
+import {
+  PostedReleaseEventSchema,
+  ReleaseIntentSchema,
+} from "@joelhooks/piper/release-domain";
 import { Schema } from "effect";
 
 const stamp = { at: Schema.Int, id: Schema.NonEmptyString };
@@ -108,6 +112,12 @@ const soloIntent = Schema.Union([
 ]);
 
 export const JobSchema = Schema.Union([
+  Schema.TaggedStruct("release", {
+    head: Sha,
+    intent: ReleaseIntentSchema,
+    repo: Schema.NonEmptyString,
+    target: Schema.NonEmptyString,
+  }),
   Schema.TaggedStruct("train", {
     head: Sha,
     intent: trainIntent,
@@ -125,6 +135,7 @@ export const JobSchema = Schema.Union([
 export type Job = typeof JobSchema.Type;
 
 export const EventSchema = Schema.Union([
+  PostedReleaseEventSchema,
   PostedEventSchema,
   PostedSoloEventSchema,
 ]);

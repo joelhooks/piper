@@ -8,7 +8,9 @@
           "effect/Arbitrary",
           "effect/http/HttpClient",
           "effect/http/HttpClientRequest",
-          "effect/http/HttpClientResponse"
+          "effect/http/HttpClientResponse",
+          "effect/process/ChildProcess",
+          "effect/process/ChildProcessSpawner"
         ]
       }
     ]

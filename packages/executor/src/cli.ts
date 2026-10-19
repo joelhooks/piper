@@ -9,6 +9,11 @@ import { runOnce } from "./drain.js";
 import { Judge } from "./execute.js";
 import { GitHub } from "./github.js";
 import { Journal, recorderLayer } from "./journal.js";
+import {
+  ReleaseCommandConfig,
+  ReleaseCommandsSchema,
+  releaseWriters,
+} from "./release.js";
 import { TokenProvider } from "./token.js";
 import { Transport } from "./transport.js";
 import { Outbox } from "./worker.js";
@@ -61,6 +66,14 @@ const command = Command.make(
           Schema.fromJsonString(Schema.Record(Schema.String, Schema.String))
         )(workflowsJson);
 
+        const releaseJson = yield* Config.String("PIPER_RELEASE_COMMANDS").pipe(
+          Config.withDefault("{}")
+        );
+
+        const releaseCommands = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(ReleaseCommandsSchema)
+        )(releaseJson);
+
         const transport = Transport.layer(options.readInterval).pipe(
           Layer.provide(FetchHttpClient.layer)
         );
@@ -77,6 +90,8 @@ const command = Command.make(
 
         const runtime = Layer.mergeAll(
           services,
+          releaseWriters(options.mode),
+          Layer.succeed(ReleaseCommandConfig, releaseCommands),
           Judge.absent,
           recorderLayer.pipe(Layer.provide(journal)),
           journal

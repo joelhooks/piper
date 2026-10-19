@@ -9,7 +9,9 @@
           "effect/http/HttpClientRequest",
           "effect/http/FetchHttpClient",
           "effect/cli/Command",
-          "effect/cli/Flag"
+          "effect/cli/Flag",
+          "effect/process/ChildProcess",
+          "effect/process/ChildProcessSpawner"
         ]
       }
     ]

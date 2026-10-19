@@ -19,7 +19,11 @@
     "./train": "./src/machine.ts",
     "./solo": "./src/solo.ts",
     "./host": "./src/host.ts",
-    "./solo-host": "./src/solo-host.ts"
+    "./solo-host": "./src/solo-host.ts",
+    "./release": "./src/release.ts",
+    "./release-domain": "./src/release-domain.ts",
+    "./release-policy": "./src/release-policy.ts",
+    "./release-host": "./src/release-host.ts"
   },
   "dependencies": {
     "@xstate/effect": "0.1.0-alpha.7",
