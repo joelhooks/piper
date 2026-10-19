@@ -43,6 +43,9 @@ export const isInfra = (run: CheckRun): boolean =>
   run.conclusion !== null &&
   INFRA.has(run.conclusion);
 
+export const infraOnly = (failing: readonly CheckRun[]): boolean =>
+  failing.length > 0 && failing.every(isInfra);
+
 export const attemptOf = (run: CheckRun): number => run.attempt ?? 1;
 
 export const isLaterAttempt = (run: CheckRun, earlier: CheckRun): boolean =>

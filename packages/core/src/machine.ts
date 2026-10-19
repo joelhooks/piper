@@ -19,6 +19,7 @@ import { TrainEvents, TrainInputSchema } from "./domain.js";
 import type { Plan } from "./plan.js";
 import {
   excerptOf,
+  infraOnly,
   MAX_CARS,
   probeHalf,
   RERUN_BELOW_P,
@@ -187,6 +188,23 @@ const startTesting = (context: TrainContext, at: number): TrainContext => ({
   ciDeadlineAt: at + context.ciTimeoutMs,
   pollAt: at + context.pollMs,
 });
+
+const rerunChecks = (
+  context: TrainContext,
+  at: number,
+  head: string
+): TrainContext =>
+  record(
+    emit(
+      startTesting(
+        { ...context, red: undefined, reruns: [...context.reruns, head] },
+        at
+      ),
+      at,
+      { head, kind: "RerunChecks" }
+    ),
+    { at, head, kind: "rerun" }
+  );
 
 const stopClock = (context: TrainContext): TrainContext => ({
   ...context,
@@ -380,24 +398,37 @@ const judgeProbe = (
     : narrow(context, at, bisect.probe, red);
 };
 
-const triage = (context: TrainContext, at: number, red: Red) => ({
-  context: emit(
-    verdictFact(
-      stopClock({ ...context, red }),
+const triage = (
+  context: TrainContext,
+  at: number,
+  red: Red
+): TrainTransition => {
+  if (infraOnly(red.failing) && !context.reruns.includes(red.head)) {
+    return {
+      context: rerunChecks(context, at, red.head),
+      target: "#train.testing.polling",
+    };
+  }
+
+  return {
+    context: emit(
+      verdictFact(
+        stopClock({ ...context, red }),
+        at,
+        red.head,
+        red.kind === "timeout" ? "timeout" : "red"
+      ),
       at,
-      red.head,
-      red.kind === "timeout" ? "timeout" : "red"
+      {
+        cars: context.cars,
+        failing: red.failing,
+        head: red.head,
+        kind: "RankSuspects",
+      }
     ),
-    at,
-    {
-      cars: context.cars,
-      failing: red.failing,
-      head: red.head,
-      kind: "RankSuspects",
-    }
-  ),
-  target: "#train.testing.triaging" as const,
-});
+    target: "#train.testing.triaging",
+  };
+};
 
 const rejectedState = (value: StateValue): string =>
   Predicate.isString(value) ? value : JSON.stringify(value);
@@ -596,6 +627,14 @@ export const trainMachine = setupEffect({
                     kind: verdict.kind,
                   }
                 : undefined;
+
+              if (
+                red !== undefined &&
+                infraOnly(red.failing) &&
+                !context.reruns.includes(red.head)
+              ) {
+                return { context: rerunChecks(next, event.at, red.head) };
+              }
 
               return judgeProbe(
                 verdictFact(
@@ -1013,21 +1052,10 @@ export const trainMachine = setupEffect({
                 !context.reruns.includes(red.head)
               ) {
                 return {
-                  context: record(
-                    emit(
-                      startTesting(
-                        {
-                          ...judged,
-                          ranks: event.ranks,
-                          red: undefined,
-                          reruns: [...context.reruns, red.head],
-                        },
-                        event.at
-                      ),
-                      event.at,
-                      { head: red.head, kind: "RerunChecks" }
-                    ),
-                    { at: event.at, head: red.head, kind: "rerun" }
+                  context: rerunChecks(
+                    { ...judged, ranks: event.ranks },
+                    event.at,
+                    red.head
                   ),
                   target: "polling",
                 };

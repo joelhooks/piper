@@ -20,7 +20,7 @@ pnpm check
 
 ## What the machines do
 
-**Train:** select eligible pull requests in operator order, build them together, and wait for checks on the exact build head. A green train needs an operator's head-bound GO before it requests a merge. A changed main branch triggers a rebuild. A failed train narrows suspects through probe builds and removes a culprit. Judge rankings order suspects. A timeout earns one retry only when every car has a known probability below 0.2.
+**Train:** select eligible pull requests in operator order, build them together, and wait for checks on the exact build head. A green train needs an operator's head-bound GO before it requests a merge. A changed main branch triggers a rebuild. A failed train narrows suspects through probe builds and removes a culprit. Judge rankings order suspects. A timeout earns one retry only when every car has a known probability below 0.2. When every failing check is cancelled, fails to start, or is stale, the train or probe head reruns checks once before triage. Another environment-only red on the same head follows the usual triage or probe narrowing path.
 
 **Solo triage:** retry failed checks once in the same workflow context. Checks that remain red run against the original base without the patch. The results distinguish a flake, runner failure, broken base, and patch regression. Judge calls annotate the record. They cannot change the outcome or requested work.
 
