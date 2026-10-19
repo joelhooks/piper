@@ -369,18 +369,20 @@ const executeTrain = Effect.fn("Executor.train")(function* executeTrain(
     }
 
     case "OpenTrainPr": {
-      const refs = yield* decode(Ref)(
-        yield* github.read(
-          job.repo,
-          `/git/ref/heads/${encodeURIComponent(intent.branch)}`
-        )
-      );
+      if (settings.mode === "live") {
+        const refs = yield* decode(Ref)(
+          yield* github.read(
+            job.repo,
+            `/git/ref/heads/${encodeURIComponent(intent.branch)}`
+          )
+        );
 
-      if (refs.object.sha !== job.head) {
-        return yield* new ExecutorError({
-          code: "head-mismatch",
-          message: "Train branch changed before opening PR",
-        });
+        if (refs.object.sha !== job.head) {
+          return yield* new ExecutorError({
+            code: "head-mismatch",
+            message: "Train branch changed before opening PR",
+          });
+        }
       }
 
       const responses = yield* apply(

@@ -200,6 +200,7 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     crash: false,
     failPost: false,
     head: HEAD,
+    refMissing: false,
   };
 
   const read = Effect.fn("Fake.read")(function* read(
@@ -241,7 +242,12 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     }
 
     if (path.startsWith("/git/ref/")) {
-      return { object: { sha: HEAD } };
+      return controls.refMissing
+        ? yield* new ExecutorError({
+            code: "not-found",
+            message: "synthetic missing ref",
+          })
+        : { object: { sha: HEAD } };
     }
 
     return yield* new ExecutorError({

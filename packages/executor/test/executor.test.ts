@@ -186,6 +186,39 @@ describe("executor intent translation", () => {
     })
   );
 
+  it.effect(
+    "a dry run opens its train PR without reading a branch it never wrote",
+    () =>
+      Effect.gen(function* openWithoutRef() {
+        const job = train({
+          at: 1,
+          base: BASE,
+          branch: "train/1",
+          cars: [],
+          id: "train-1/2",
+          kind: "OpenTrainPr",
+        });
+
+        const dryRun = fake([job]);
+        dryRun.controls.refMissing = true;
+        yield* runOnce(dry).pipe(Effect.provide(dryRun.layer));
+        expect(
+          dryRun.records.flatMap((record) =>
+            record.wouldDo.map((write) => write.path)
+          )
+        ).toEqual(["/pulls"]);
+        expect(dryRun.reads).toEqual([]);
+
+        const liveRun = fake([job]);
+        liveRun.controls.refMissing = true;
+
+        yield* Effect.exit(runOnce(live).pipe(Effect.provide(liveRun.layer)));
+
+        expect(liveRun.reads).toEqual(["/git/ref/heads/train%2F1"]);
+        expect(liveRun.writes).toEqual([]);
+      })
+  );
+
   it.effect("merge head mismatch posts mergeRefused without a write", () =>
     Effect.gen(function* mismatch() {
       const job = train({
