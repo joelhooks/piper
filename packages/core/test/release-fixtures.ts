@@ -4,7 +4,10 @@ export const releaseInput = {
   allowAbsentReview: false,
   at: 100,
   blackoutUntil: 0,
-  checks: ["availability", "integrity"],
+  checks: [
+    { name: "availability", onFail: "restore" },
+    { name: "integrity", onFail: "restore" },
+  ],
   docs: { diff: "synthetic diff", spec: "synthetic spec" },
   expectation: {
     allowed: [

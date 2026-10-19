@@ -78,11 +78,16 @@ export const ReleaseReviewRequestSchema = Schema.Struct({
 
 export type ReleaseReviewRequest = typeof ReleaseReviewRequestSchema.Type;
 
+export const ReleaseCheckSchema = Schema.Struct({
+  name,
+  onFail: Schema.Literals(["restore", "escalate"]),
+});
+
 export const ReleaseInputSchema = Schema.Struct({
   allowAbsentReview: Schema.Boolean,
   at: time,
   blackoutUntil: time,
-  checks: Schema.NonEmptyArray(name),
+  checks: Schema.NonEmptyArray(ReleaseCheckSchema),
   docs: ReleaseDocsSchema,
   expectation: ReleaseExpectationSchema,
   minimumRunwayMs: time,
@@ -108,7 +113,7 @@ export const ReleaseEvents = {
   observed: Schema.Struct({
     ...stamp,
     check: name,
-    outcome: Schema.Literals(["pass", "fail", "unknown"]),
+    outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
   }),
   planned: Schema.Struct({ ...stamp, rows: ReleasePlanSchema }),
   reject: Schema.Struct({ ...stamp, by: name, reason: name }),
@@ -187,11 +192,22 @@ export const ReleaseIntentSchema = Schema.Union([
   }),
   Schema.Struct({
     ...intentStamp,
-    checks: Schema.NonEmptyArray(name),
+    checks: Schema.NonEmptyArray(ReleaseCheckSchema),
     deadlineAt: time,
     kind: Schema.Literal("Observe"),
   }),
   Schema.Struct({ ...intentStamp, kind: Schema.Literal("Restore"), to: name }),
+  Schema.Struct({
+    ...intentStamp,
+    cause: Schema.Literal("observationFailed"),
+    check: name,
+    kind: Schema.Literal("NotifyOwner"),
+  }),
+  Schema.Struct({
+    ...intentStamp,
+    cause: Schema.Literal("observationExpired"),
+    kind: Schema.Literal("NotifyOwner"),
+  }),
 ]);
 
 export type ReleaseIntent = typeof ReleaseIntentSchema.Type;
@@ -204,6 +220,7 @@ export const ReleaseStateSchema = Schema.Literals([
   "fired",
   "observing",
   "accepted",
+  "escalated",
   "restoring",
   "restored",
   "held",

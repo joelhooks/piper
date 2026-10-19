@@ -109,7 +109,7 @@ export const ReleaseReviewer = Context.Reference<{
 const events = Data.taggedEnum<PostedReleaseEvent>();
 
 const ObservedSchema = Schema.Struct({
-  outcome: Schema.Literals(["pass", "fail", "unknown"]),
+  outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
 });
 
 const completed = (posted: readonly PostedReleaseEvent[] = []): Outcome => ({
@@ -179,9 +179,29 @@ const runRelease = Effect.fn("Executor.release.run")(function* runRelease(
     return completed(submitted ? [] : [events.reviewUnavailable({ at })]);
   }
 
+  if (intent.kind === "NotifyOwner") {
+    const args =
+      intent.cause === "observationFailed"
+        ? ["--cause", intent.cause, "--check", intent.check]
+        : ["--cause", intent.cause];
+
+    const command = yield* resolve("NotifyOwner", args);
+
+    if (settings.mode === "dry-run") {
+      return yield* record(job, [
+        { body: { args: command.args }, method: "POST", path: command.command },
+      ]);
+    }
+
+    const notifier = yield* ReleaseCommands;
+    yield* notifier.run(command);
+
+    return completed();
+  }
+
   const keys =
     intent.kind === "Observe"
-      ? intent.checks.map((check) => ({
+      ? intent.checks.map(({ name: check }) => ({
           args: ["--check", check],
           key: `Observe:${check}`,
         }))
@@ -217,7 +237,7 @@ const runRelease = Effect.fn("Executor.release.run")(function* runRelease(
   if (intent.kind === "Observe") {
     const observations: PostedReleaseEvent[] = [];
 
-    for (const check of intent.checks) {
+    for (const { name: check } of intent.checks) {
       const { outcome } = yield* Effect.gen(function* observe() {
         const command = yield* resolve(`Observe:${check}`, ["--check", check]);
         const now = yield* Clock.currentTimeMillis;
@@ -282,12 +302,16 @@ const failureEvents = (
   at: number
 ): readonly PostedReleaseEvent[] => {
   switch (intent.kind) {
+    case "NotifyOwner": {
+      return [];
+    }
+
     case "RequestReview": {
       return [events.reviewUnavailable({ at })];
     }
 
     case "Observe": {
-      return intent.checks.map((check) =>
+      return intent.checks.map(({ name: check }) =>
         events.observed({ at, check, outcome: "unknown" })
       );
     }

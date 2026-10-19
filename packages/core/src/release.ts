@@ -72,19 +72,37 @@ const restore = (context: ReleaseContext, at: number, cause: string) =>
     cause
   );
 
+const escalate = (
+  context: ReleaseContext,
+  at: number,
+  notification: Extract<IntentPayload, { readonly kind: "NotifyOwner" }>
+) => move(emit(context, at, notification), "escalated", at, notification.cause);
+
 const observe = (
   context: ReleaseContext,
   event: Extract<ReleaseEvent, { readonly type: "observed" }>
 ) => {
-  if (
-    event.outcome === "fail" ||
-    (context.deadlineAt !== undefined && event.at >= context.deadlineAt)
-  ) {
-    return restore(
-      context,
-      event.at,
-      event.outcome === "fail" ? "observationFailed" : "observationExpired"
-    );
+  if (event.outcome === "breach") {
+    return restore(context, event.at, "observationBreach");
+  }
+
+  if (event.outcome === "fail") {
+    return context.checks.some(
+      (check) => check.name === event.check && check.onFail === "restore"
+    )
+      ? restore(context, event.at, "observationFailed")
+      : escalate(context, event.at, {
+          cause: "observationFailed",
+          check: event.check,
+          kind: "NotifyOwner",
+        });
+  }
+
+  if (context.deadlineAt !== undefined && event.at >= context.deadlineAt) {
+    return escalate(context, event.at, {
+      cause: "observationExpired",
+      kind: "NotifyOwner",
+    });
   }
 
   const observations = {
@@ -94,7 +112,7 @@ const observe = (
 
   return move(
     { ...context, observations },
-    context.checks.every((check) => observations[check] === "pass")
+    context.checks.every((check) => observations[check.name] === "pass")
       ? "accepted"
       : "observing",
     event.at,
@@ -171,6 +189,7 @@ export const releaseMachine = setupEffect({
             : undefined,
       },
     },
+    escalated: { type: "final" },
     expectationCheck: {
       always: ({ context }) => {
         const offending = checkReleaseExpectation(
@@ -230,14 +249,18 @@ export const releaseMachine = setupEffect({
     observing: {
       on: {
         observed: ({ context, event }) =>
-          event.at >= context.lastAt && context.checks.includes(event.check)
+          event.at >= context.lastAt &&
+          context.checks.some((check) => check.name === event.check)
             ? observe(context, event)
             : undefined,
         tick: ({ context, event }) =>
           event.at >= context.lastAt &&
           context.deadlineAt !== undefined &&
           event.at >= context.deadlineAt
-            ? restore(context, event.at, "observationExpired")
+            ? escalate(context, event.at, {
+                cause: "observationExpired",
+                kind: "NotifyOwner",
+              })
             : undefined,
       },
     },

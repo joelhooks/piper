@@ -60,7 +60,10 @@ const intents: readonly ReleaseIntent[] = [
   { ...stamp, kind: "Deploy", target: "commit-next" },
   {
     ...stamp,
-    checks: ["availability", "integrity"],
+    checks: [
+      { name: "availability", onFail: "restore" },
+      { name: "integrity", onFail: "escalate" },
+    ],
     deadlineAt: 1000,
     kind: "Observe",
   },
@@ -108,6 +111,96 @@ const completion = {
 };
 
 describe("release executor command and judgment ports", () => {
+  it.effect(
+    "owner notifications use literal arguments, honor dry-run, and emit no machine events",
+    () =>
+      Effect.gen(function* notifications() {
+        for (const intent of [
+          {
+            ...stamp,
+            cause: "observationFailed",
+            check: "availability",
+            kind: "NotifyOwner",
+          },
+          { ...stamp, cause: "observationExpired", kind: "NotifyOwner" },
+        ] satisfies readonly ReleaseIntent[]) {
+          for (const settings of [dry, live]) {
+            const state = fake([]);
+            const calls: unknown[] = [];
+
+            const args =
+              intent.cause === "observationFailed"
+                ? ["--cause", intent.cause, "--check", intent.check]
+                : ["--cause", intent.cause];
+
+            const result = yield* execute(job(intent), settings).pipe(
+              Effect.provide(
+                Layer.mergeAll(
+                  state.layer,
+                  admitted,
+                  Layer.succeed(ReleaseCommandConfig, {
+                    NotifyOwner: { args: [], command: "notify-command" },
+                  }),
+                  Layer.succeed(ReleaseCommands, {
+                    run: (command) =>
+                      Effect.sync(() => {
+                        calls.push(command);
+
+                        return "";
+                      }),
+                  })
+                )
+              )
+            );
+
+            expect(result.events).toEqual([]);
+            expect(result.status).toBe(
+              settings.mode === "dry-run" ? "recorded-would-do" : "done"
+            );
+            expect(calls).toEqual(
+              settings.mode === "dry-run"
+                ? []
+                : [{ args, command: "notify-command" }]
+            );
+          }
+        }
+      })
+  );
+
+  it.effect("check commands preserve hard breach outcomes", () =>
+    Effect.gen(function* breach() {
+      const state = fake([]);
+
+      const result = yield* execute(
+        job({
+          ...stamp,
+          checks: [{ name: "availability", onFail: "escalate" }],
+          deadlineAt: 1000,
+          kind: "Observe",
+        }),
+        live
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            state.layer,
+            admitted,
+            Layer.succeed(ReleaseCommandConfig, commands),
+            Layer.succeed(ReleaseCommands, {
+              run: () => Effect.succeed('{"outcome":"breach"}'),
+            })
+          )
+        )
+      );
+
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0]).toMatchObject({
+        at: 0,
+        check: "availability",
+        outcome: "breach",
+      });
+      expect(result.events[0]?._tag).toBe("observed");
+    })
+  );
   it.effect(
     "dry-run records every command and review payload, constructing no live spawner",
     () =>
@@ -180,7 +273,9 @@ describe("release executor command and judgment ports", () => {
       Effect.gen(function* liveCommands() {
         for (const intent of intents.filter(
           (candidate) =>
-            candidate.kind !== "RequestReview" && candidate.kind !== "Observe"
+            candidate.kind !== "RequestReview" &&
+            candidate.kind !== "Observe" &&
+            candidate.kind !== "NotifyOwner"
         )) {
           const calls: ChildProcess.Command[] = [];
           const state = fake([]);
@@ -271,7 +366,10 @@ describe("release executor command and judgment ports", () => {
         const fiber = yield* execute(
           job({
             ...stamp,
-            checks: ["availability", "integrity"],
+            checks: [
+              { name: "availability", onFail: "restore" },
+              { name: "integrity", onFail: "escalate" },
+            ],
             deadlineAt: now + 1000,
             kind: "Observe",
           }),
@@ -345,7 +443,10 @@ describe("release executor command and judgment ports", () => {
         const result = yield* execute(
           job({
             ...stamp,
-            checks: ["availability", "integrity"],
+            checks: [
+              { name: "availability", onFail: "restore" },
+              { name: "integrity", onFail: "escalate" },
+            ],
             deadlineAt: 1000,
             kind: "Observe",
           }),

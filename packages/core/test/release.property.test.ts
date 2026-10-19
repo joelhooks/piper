@@ -273,7 +273,7 @@ describe("release invariants over synthetic plans and traces", () => {
   );
 
   it.effect(
-    "missing and unknown observations expire, failed restore holds, stale events cannot buy runway",
+    "missing and unknown observations escalate, failed restore holds, stale events cannot buy runway",
     () =>
       Effect.gen(function* deadlines() {
         let persisted = yield* stepRelease(
@@ -289,6 +289,16 @@ describe("release invariants over synthetic plans and traces", () => {
             type: "observed",
           },
           { at: 204, type: "tick" },
+        ]);
+        expect((yield* readRelease(persisted)).value).toBe("escalated");
+        persisted = yield* stepRelease(yield* openRelease(releaseInput), [
+          ...releaseHappy.slice(0, 3),
+          {
+            at: 104,
+            operation: "Deploy",
+            reason: "deployment failed",
+            type: "failed",
+          },
         ]);
         expect((yield* readRelease(persisted)).value).toBe("restoring");
         persisted = yield* stepRelease(persisted, [
