@@ -10,12 +10,13 @@ import type {
   ReleaseIntent,
   ReleaseRow,
   ReleaseState,
+  ReleaseViolation,
 } from "./release-domain.js";
 import { checkReleaseExpectation, releaseRunway } from "./release-policy.js";
 
 export interface ReleaseContext extends ReleaseInput {
   readonly rows: readonly ReleaseRow[];
-  readonly offending: readonly ReleaseRow[];
+  readonly offending: readonly ReleaseViolation[];
   readonly observations: Readonly<Record<string, "pass" | "fail" | "unknown">>;
   readonly deadlineAt: number | undefined;
   readonly facts: readonly ReleaseFact[];
@@ -56,7 +57,7 @@ const move = (
     ...context,
     facts: [
       ...context.facts,
-      { at, by, cause, rows: context.offending, state },
+      { at, by, cause, offending: context.offending, state },
     ],
     lastAt: at,
   },

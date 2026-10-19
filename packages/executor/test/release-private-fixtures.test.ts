@@ -33,10 +33,11 @@ describe.skipIf(directory === undefined)(
             Schema.fromJsonString(ReleaseExpectationSchema)
           )(yield* fs.readFileString(`${directory}/expectation.json`));
 
-          const stop = checkReleaseExpectation(plan, {
-            ...expectation,
-            allowed: [{}],
-          });
+          const violations = checkReleaseExpectation(plan, expectation);
+
+          const stop = violations.flatMap((violation) =>
+            violation.reason === "stop" ? [violation.row] : []
+          );
 
           expect(stop.length > 0).toBe(true);
           const allowed = plan.filter((row) => !stop.includes(row));
@@ -49,7 +50,14 @@ describe.skipIf(directory === undefined)(
             { at: 101, rows: plan, type: "planned" },
           ]);
 
-          expect((yield* readRelease(held)).matches("held")).toBe(true);
+          const heldSnapshot = yield* readRelease(held);
+
+          expect(heldSnapshot.matches("held")).toBe(true);
+          expect(
+            heldSnapshot.context.facts
+              .at(-1)
+              ?.offending?.some((violation) => violation.reason === "stop")
+          ).toBe(true);
 
           const passed = yield* stepRelease(initial, [
             { at: 101, rows: allowed, type: "planned" },

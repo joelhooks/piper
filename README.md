@@ -114,7 +114,7 @@ The lifecycle is `planned → expectationCheck → review → armed → fired �
 
 `ReleaseInputSchema` requires a unique `runId`, `target`, `previousTarget`, opening time `at`, `expectation`, `docs: { spec, diff }`, nonempty named `checks`, positive `observationTimeoutMs`, `minimumRunwayMs`, `windowEndsAt`, `blackoutUntil`, and `allowAbsentReview`. Times are nonnegative epoch milliseconds. Supply window and blackout facts using `window { at, windowEndsAt, blackoutUntil }`. Event times must not precede the last accepted fact. The host must authenticate operator and reviewer identities and supply trusted clock facts.
 
-Opening emits `PlanRelease { target }`. Post `planned { at, rows }` after obtaining the plan. The pure checker holds any stop row or unmatched row, preserving offending rows. A passing plan emits `RequestReview { runId, plan, docs }`. The review port submits this payload asynchronously; its private adapter later posts `reviewed { at, verdict: "approve" | "hold", by }`. No reviewer means `reviewUnavailable`, which holds by default. Explicit `allowAbsentReview: true` permits arming without a reviewer, records that absence, and never creates an approval verdict.
+Opening emits `PlanRelease { target }`. Post `planned { at, rows }` after obtaining the plan. The pure checker holds any stop row, unmatched row, or unsatisfied required count. Empty plans hold unless explicitly permitted. The view and held fact preserve reason-tagged violations, including missing rows that cannot supply a row value. A passing plan emits `RequestReview { runId, plan, docs }`. The review port submits this payload asynchronously; its private adapter later posts `reviewed { at, verdict: "approve" | "hold", by }`. No reviewer means `reviewUnavailable`, which holds by default. Explicit `allowAbsentReview: true` permits arming without a reviewer, records that absence, and never creates an approval verdict.
 
 Only an explicit `fire { at, by }` in `armed` can emit `Deploy { target }`. Fire checks that `at >= blackoutUntil` and `windowEndsAt - at >= minimumRunwayMs`, including equality. Approval, ticks, and window updates cannot fire. A restored snapshot never re-emits deployment. After `deployed { at }`, the machine emits `Observe { checks, deadlineAt }` and sets its deadline. Named `observed { at, check, outcome: "pass" | "fail" | "unknown" }` events all need to pass before the deadline. Any failure, or a `tick` at or past the deadline with incomplete checks, emits `Restore { to: previousTarget }`. The host must schedule the deadline reported by `viewRelease.alarmAt`. Unknown is never healthy. `restored` finishes recovery; `failed { operation: "Restore", reason, at }` holds. Deployment failure starts recovery; planning failure holds. Commands and restoration strategy belong to adapters, not the machine.
 
@@ -124,7 +124,12 @@ Plans are arrays of opaque records. Map private provider output into this public
 
 ```json
 [
-  { "id": "resource-a", "kind": "resource", "action": "update" },
+  {
+    "id": "resource-a",
+    "kind": "resource",
+    "action": "update",
+    "attributes": { "from": "before", "to": "after" }
+  },
   { "id": "value-a", "kind": "computed", "action": "read" },
   { "id": "output-a", "kind": "deferred", "action": "read" }
 ]
@@ -132,18 +137,34 @@ Plans are arrays of opaque records. Map private provider output into this public
 
 ```json
 {
+  "allowEmpty": false,
   "allowed": [
-    { "kind": "resource", "action": "update" },
+    { "kind": "resource", "action": "update", "attributes": { "to": "after" } },
     { "kind": "computed" },
     { "idPrefix": "output-", "kind": "deferred" }
   ],
-  "stop": [{ "action": "delete" }]
+  "stop": [{ "action": "delete" }],
+  "required": [
+    {
+      "match": {
+        "id": "resource-a",
+        "attributes": { "from": "before", "to": "after" }
+      },
+      "max": 1
+    },
+    { "match": { "kind": "computed" }, "min": 1, "max": 1 },
+    { "match": { "kind": "deferred" }, "min": 1, "max": 1 }
+  ]
 }
 ```
 
-A matcher may contain `id`, `idPrefix`, `kind`, and `action`. Supplied fields are conjunctive; strings compare exactly, except `idPrefix`. Allowed matchers form a union. Stop wins even when allowed also matches. An empty matcher `{}` explicitly matches every row; an empty allowed list permits no rows. No provider-specific meaning is attached to any field.
+Rows may carry `attributes: Record<string, string>`. A matcher may contain `id`, `idPrefix`, `kind`, `action`, and `attributes`. Supplied fields are conjunctive; strings compare exactly, except `idPrefix`. Every supplied attribute key must exist with its exact value. Missing or unequal attributes do not match. Additional row attributes are permitted. Allowed matchers form a union. Stop wins even when allowed also matches. An empty matcher `{}` explicitly matches every row; an empty allowed list permits no rows. No provider-specific meaning is attached to any field.
 
-The private fixture harness reads `PIPER_RELEASE_FIXTURES`, a directory containing `plan.json` and `expectation.json` in these shapes. The captured plan must include at least one stop row; all other rows must pass. The harness proves the full plan holds and the plan without stop rows reaches review. It skips with a clear message when the variable is unset. Keep the directory outside the repository; nothing copies or persists its contents. Run it with `PIPER_RELEASE_FIXTURES=/private/fixtures pnpm exec vitest run packages/executor/test/release-private-fixtures.test.ts`.
+`required` is an optional array of `{ match, min?, max? }` constraints. Each counts all rows matching its matcher. An omitted minimum means one; an omitted maximum is unbounded. Counts must be nonnegative integers, and a supplied maximum cannot be below the effective minimum. Set both bounds to the same count for an exact set size. Set `min: 0` explicitly when zero matches are valid. Required matchers constrain presence and counts; they do not implicitly allow rows. Omitting `required` means no additional count constraints.
+
+An empty plan holds by default, independently of allowed and required matchers. Only `allowEmpty: true` removes that empty-plan restriction; required constraints still apply. Violations have shape `{ row?, reason, matcher? }`. Reasons are `stop`, `unmatched`, `requiredMissing` for a count below its minimum, and `countOutOfRange` for a count above its maximum. Stop violations include their row and matcher; unmatched violations include their row. Count violations include their matcher but no invented row. The empty-plan refusal is `requiredMissing` with neither row nor matcher. `viewRelease.offending` and the held fact's `offending` array retain these entries.
+
+The private fixture harness reads `PIPER_RELEASE_FIXTURES`, a directory containing `plan.json` and `expectation.json` in these shapes. The captured plan must include at least one stop row. After removing stop rows, all remaining rows must satisfy attribute matches and required count constraints in the richer expectation shape. The harness proves the full plan holds and the plan without stop rows reaches review. It skips with a clear message when the variable is unset. Keep the directory outside the repository; nothing copies or persists its contents. Run it with `PIPER_RELEASE_FIXTURES=/private/fixtures pnpm exec vitest run packages/executor/test/release-private-fixtures.test.ts`.
 
 ## Executor
 

@@ -40,7 +40,7 @@ const steps = Arbitrary.array(
 const eventOf = (n: number, at: number): ReleaseEvent => {
   switch (n) {
     case 0: {
-      return { at, rows: [], type: "planned" };
+      return { at, rows: planEvent.rows, type: "planned" };
     }
 
     case 1: {
@@ -96,7 +96,11 @@ describe("release invariants over synthetic plans and traces", () => {
 
         const view = viewRelease(yield* readRelease(persisted));
         expect(view.state).toBe("held");
-        expect(view.offending).toContainEqual(stop);
+        expect(view.offending).toContainEqual({
+          matcher: { action: "delete" },
+          reason: "stop",
+          row: stop,
+        });
         expect(view.intents.map((intent) => intent.kind)).toEqual([
           "PlanRelease",
         ]);
@@ -113,7 +117,7 @@ describe("release invariants over synthetic plans and traces", () => {
 
       expect(
         viewRelease(yield* readRelease(persisted)).offending
-      ).toContainEqual(row);
+      ).toContainEqual({ reason: "unmatched", row });
       expect((yield* readRelease(persisted)).value).toBe("held");
     })
   );
@@ -344,15 +348,26 @@ describe("release invariants over synthetic plans and traces", () => {
     "matchers are conjunctions, allowed is a union, and stop wins",
     { plan: rows },
     ({ plan }) => {
-      expect(checkReleaseExpectation(plan, releaseInput.expectation)).toEqual(
-        []
-      );
-      expect(checkReleaseExpectation(plan, { allowed: [], stop: [] })).toEqual(
-        plan
-      );
       expect(
-        checkReleaseExpectation(plan, { allowed: [{}], stop: [{}] })
-      ).toEqual(plan);
+        checkReleaseExpectation(plan, {
+          ...releaseInput.expectation,
+          allowEmpty: true,
+        })
+      ).toEqual([]);
+      expect(
+        checkReleaseExpectation(plan, {
+          allowEmpty: true,
+          allowed: [],
+          stop: [],
+        })
+      ).toEqual(plan.map((row) => ({ reason: "unmatched", row })));
+      expect(
+        checkReleaseExpectation(plan, {
+          allowEmpty: true,
+          allowed: [{}],
+          stop: [{}],
+        })
+      ).toEqual(plan.map((row) => ({ matcher: {}, reason: "stop", row })));
     }
   );
 });

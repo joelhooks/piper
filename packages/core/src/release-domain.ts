@@ -6,6 +6,7 @@ const time = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 export const ReleaseRowSchema = Schema.Struct({
   action: name,
+  attributes: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   id: name,
   kind: name,
 });
@@ -16,17 +17,53 @@ export type ReleaseRow = typeof ReleaseRowSchema.Type;
 
 export const ReleaseMatcherSchema = Schema.Struct({
   action: Schema.optionalKey(name),
+  attributes: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   id: Schema.optionalKey(name),
   idPrefix: Schema.optionalKey(name),
   kind: Schema.optionalKey(name),
 });
 
+const count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+export const ReleaseRequiredSchema = Schema.Struct({
+  match: ReleaseMatcherSchema,
+  max: Schema.optionalKey(count),
+  min: Schema.optionalKey(count),
+}).check(
+  Schema.makeFilter((required) =>
+    required.max === undefined || required.max >= (required.min ?? 1)
+      ? undefined
+      : "Required matcher maximum must be at least its minimum"
+  )
+);
+
 export const ReleaseExpectationSchema = Schema.Struct({
+  allowEmpty: Schema.optionalKey(Schema.Boolean),
   allowed: Schema.Array(ReleaseMatcherSchema),
+  required: Schema.optionalKey(Schema.Array(ReleaseRequiredSchema)),
   stop: Schema.Array(ReleaseMatcherSchema),
 });
 
 export type ReleaseExpectation = typeof ReleaseExpectationSchema.Type;
+
+export const ReleaseViolationSchema = Schema.Union([
+  Schema.Struct({
+    matcher: ReleaseMatcherSchema,
+    reason: Schema.Literal("stop"),
+    row: ReleaseRowSchema,
+  }),
+  Schema.Struct({ reason: Schema.Literal("unmatched"), row: ReleaseRowSchema }),
+  Schema.Struct({
+    matcher: Schema.optionalKey(ReleaseMatcherSchema),
+    reason: Schema.Literal("requiredMissing"),
+  }),
+  Schema.Struct({
+    matcher: ReleaseMatcherSchema,
+    reason: Schema.Literal("countOutOfRange"),
+  }),
+]);
+
+export type ReleaseViolation = typeof ReleaseViolationSchema.Type;
 
 export const ReleaseDocsSchema = Schema.Struct({
   diff: Schema.String,
@@ -179,7 +216,7 @@ export const ReleaseFactSchema = Schema.Struct({
   at: time,
   by: Schema.optional(name),
   cause: name,
-  rows: Schema.optionalKey(ReleasePlanSchema),
+  offending: Schema.optionalKey(Schema.Array(ReleaseViolationSchema)),
   state: ReleaseStateSchema,
 });
 
