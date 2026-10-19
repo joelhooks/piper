@@ -131,6 +131,7 @@ export const ReleaseEvents = {
     by: name,
     verdict: Schema.Literals(["approve", "hold"]),
   }),
+  superseded: Schema.Struct({ ...stamp, by: name, evidence: name }),
   tick: Schema.Struct(stamp),
   window: Schema.Struct({ ...stamp, blackoutUntil: time, windowEndsAt: time }),
 };
@@ -138,6 +139,7 @@ export const ReleaseEvents = {
 export const PostedReleaseEventSchema = Schema.Union([
   Schema.TaggedStruct("baselined", ReleaseEvents.baselined.fields),
   Schema.TaggedStruct("override", ReleaseEvents.override.fields),
+  Schema.TaggedStruct("superseded", ReleaseEvents.superseded.fields),
   Schema.TaggedStruct("planned", ReleaseEvents.planned.fields),
   Schema.TaggedStruct("reviewed", ReleaseEvents.reviewed.fields),
   Schema.TaggedStruct(
@@ -179,6 +181,7 @@ export const toReleaseEvent = Data.taggedEnum<PostedReleaseEvent>().$match({
     type: "reviewUnavailable",
   }),
   reviewed: (posted): ReleaseEvent => ({ ...posted, type: "reviewed" }),
+  superseded: (posted): ReleaseEvent => ({ ...posted, type: "superseded" }),
   tick: (posted): ReleaseEvent => ({ ...posted, type: "tick" }),
   window: (posted): ReleaseEvent => ({ ...posted, type: "window" }),
 });
@@ -242,6 +245,7 @@ export const ReleaseStateSchema = Schema.Literals([
   "restored",
   "held",
   "rejected",
+  "superseded",
 ]);
 
 export type ReleaseState = typeof ReleaseStateSchema.Type;
@@ -266,6 +270,12 @@ export const ReleaseFactSchema = Schema.Union([
     by: name,
     kind: Schema.Literal("override"),
     reason: name,
+  }),
+  Schema.Struct({
+    ...releaseTransitionFact.fields,
+    by: name,
+    evidence: name,
+    kind: Schema.Literal("superseded"),
   }),
   releaseTransitionFact,
 ]);

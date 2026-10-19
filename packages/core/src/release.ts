@@ -87,6 +87,29 @@ const overrideReview = (
   target: targetOf("armed"),
 });
 
+const supersede = (
+  context: ReleaseContext,
+  event: Extract<ReleaseEvent, { readonly type: "superseded" }>
+) => ({
+  context: {
+    ...context,
+    deadlineAt: undefined,
+    facts: [
+      ...context.facts,
+      {
+        at: event.at,
+        by: event.by,
+        cause: "superseded",
+        evidence: event.evidence,
+        kind: "superseded",
+        state: "superseded",
+      } satisfies ReleaseFact,
+    ],
+    lastAt: event.at,
+  },
+  target: targetOf("superseded"),
+});
+
 const restore = (context: ReleaseContext, at: number, cause: string) =>
   move(
     emit(context, at, { kind: "Restore", to: context.previousTarget }),
@@ -314,6 +337,8 @@ export const releaseMachine = setupEffect({
           context.checks.some((check) => check.name === event.check)
             ? observe(context, event)
             : undefined,
+        superseded: ({ context, event }) =>
+          event.at >= context.lastAt ? supersede(context, event) : undefined,
         tick: ({ context, event }) =>
           event.at >= context.lastAt &&
           context.deadlineAt !== undefined &&
@@ -391,5 +416,6 @@ export const releaseMachine = setupEffect({
             : undefined,
       },
     },
+    superseded: { type: "final" },
   },
 });
