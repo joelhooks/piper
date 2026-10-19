@@ -200,6 +200,7 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     crash: false,
     failPost: false,
     head: HEAD,
+    labelMissing: false,
     refMissing: false,
   };
 
@@ -264,6 +265,16 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
 
     if (controls.crash) {
       return yield* Effect.die("synthetic crash after provider accepted");
+    }
+
+    if (
+      controls.labelMissing &&
+      operation.path.startsWith("/issues/1/labels/")
+    ) {
+      return yield* new ExecutorError({
+        code: "not-found",
+        message: "synthetic absent label",
+      });
     }
 
     if (operation.path === "/merges") {

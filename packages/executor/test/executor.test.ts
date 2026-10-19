@@ -219,6 +219,35 @@ describe("executor intent translation", () => {
       })
   );
 
+  it.effect("live label removal treats an absent label as removed", () =>
+    Effect.gen(function* absentLabel() {
+      const job = train({
+        at: 1,
+        id: "train-1/9",
+        kind: "RemoveLabels",
+        label: "train",
+        prs: [1, 3],
+      });
+
+      const fixture = fake([job]);
+      fixture.controls.labelMissing = true;
+
+      const outcome = yield* execute(job, live).pipe(
+        Effect.provide(fixture.layer)
+      );
+
+      expect(outcome.status).toBe("done");
+      expect(
+        fixture.writes.map(
+          (operation) => `${operation.method} ${operation.path}`
+        )
+      ).toEqual([
+        "DELETE /issues/1/labels/train",
+        "DELETE /issues/3/labels/train",
+      ]);
+    })
+  );
+
   it.effect("merge head mismatch posts mergeRefused without a write", () =>
     Effect.gen(function* mismatch() {
       const job = train({

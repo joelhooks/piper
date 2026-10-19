@@ -545,18 +545,34 @@ const executeTrain = Effect.fn("Executor.train")(function* executeTrain(
     }
 
     case "RemoveLabels": {
-      yield* apply(
-        job,
-        intent.prs.map((pr) =>
-          write(
-            "DELETE",
-            `/issues/${pr}/labels/${encodeURIComponent(intent.label)}`
-          )
-        ),
-        settings
+      const removals = intent.prs.map((pr) =>
+        write(
+          "DELETE",
+          `/issues/${pr}/labels/${encodeURIComponent(intent.label)}`
+        )
       );
 
-      return applied(settings);
+      if (settings.mode === "dry-run") {
+        yield* apply(job, removals, settings);
+
+        return applied(settings);
+      }
+
+      const writer = yield* GitHubWrites;
+
+      yield* Effect.forEach(
+        removals,
+        (removal) =>
+          writer.write(job, removal).pipe(
+            Effect.catchIf(
+              (error) => error.code === "not-found",
+              () => Effect.void
+            )
+          ),
+        { discard: true }
+      );
+
+      return result();
     }
 
     case "NotifyOwner": {
