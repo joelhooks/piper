@@ -92,6 +92,7 @@ export const ReleaseInputSchema = Schema.Struct({
   expectation: ReleaseExpectationSchema,
   minimumRunwayMs: time,
   observationTimeoutMs: Schema.Int.check(Schema.isGreaterThan(0)),
+  overrideBy: Schema.optionalKey(name),
   previousTarget: name,
   runId: name,
   target: name,
@@ -115,6 +116,7 @@ export const ReleaseEvents = {
     check: name,
     outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
   }),
+  override: Schema.Struct({ ...stamp, by: name, reason: name }),
   planned: Schema.Struct({ ...stamp, rows: ReleasePlanSchema }),
   reject: Schema.Struct({ ...stamp, by: name, reason: name }),
   restored: Schema.Struct(stamp),
@@ -129,6 +131,7 @@ export const ReleaseEvents = {
 };
 
 export const PostedReleaseEventSchema = Schema.Union([
+  Schema.TaggedStruct("override", ReleaseEvents.override.fields),
   Schema.TaggedStruct("planned", ReleaseEvents.planned.fields),
   Schema.TaggedStruct("reviewed", ReleaseEvents.reviewed.fields),
   Schema.TaggedStruct(
@@ -160,6 +163,7 @@ export const toReleaseEvent = Data.taggedEnum<PostedReleaseEvent>().$match({
   failed: (posted): ReleaseEvent => ({ ...posted, type: "failed" }),
   fire: (posted): ReleaseEvent => ({ ...posted, type: "fire" }),
   observed: (posted): ReleaseEvent => ({ ...posted, type: "observed" }),
+  override: (posted): ReleaseEvent => ({ ...posted, type: "override" }),
   planned: (posted): ReleaseEvent => ({ ...posted, type: "planned" }),
   reject: (posted): ReleaseEvent => ({ ...posted, type: "reject" }),
   restored: (posted): ReleaseEvent => ({ ...posted, type: "restored" }),
@@ -216,6 +220,7 @@ export const ReleaseStateSchema = Schema.Literals([
   "planned",
   "expectationCheck",
   "review",
+  "reviewHeld",
   "armed",
   "fired",
   "observing",
@@ -229,12 +234,22 @@ export const ReleaseStateSchema = Schema.Literals([
 
 export type ReleaseState = typeof ReleaseStateSchema.Type;
 
-export const ReleaseFactSchema = Schema.Struct({
+const releaseTransitionFact = Schema.Struct({
   at: time,
   by: Schema.optional(name),
   cause: name,
   offending: Schema.optionalKey(Schema.Array(ReleaseViolationSchema)),
   state: ReleaseStateSchema,
 });
+
+export const ReleaseFactSchema = Schema.Union([
+  Schema.Struct({
+    ...releaseTransitionFact.fields,
+    by: name,
+    kind: Schema.Literal("override"),
+    reason: name,
+  }),
+  releaseTransitionFact,
+]);
 
 export type ReleaseFact = typeof ReleaseFactSchema.Type;

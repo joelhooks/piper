@@ -64,6 +64,28 @@ const move = (
   target: targetOf(state),
 });
 
+const overrideReview = (
+  context: ReleaseContext,
+  event: Extract<ReleaseEvent, { readonly type: "override" }>
+) => ({
+  context: {
+    ...context,
+    facts: [
+      ...context.facts,
+      {
+        at: event.at,
+        by: event.by,
+        cause: "reviewOverride",
+        kind: "override",
+        reason: event.reason,
+        state: "armed",
+      } satisfies ReleaseFact,
+    ],
+    lastAt: event.at,
+  },
+  target: targetOf("armed"),
+});
+
 const restore = (context: ReleaseContext, at: number, cause: string) =>
   move(
     emit(context, at, { kind: "Restore", to: context.previousTarget }),
@@ -306,15 +328,27 @@ export const releaseMachine = setupEffect({
                 "reviewUnavailable"
               )
             : undefined,
-        reviewed: ({ context, event }) =>
-          event.at >= context.lastAt
+        reviewed: ({ context, event }) => {
+          const heldState =
+            context.overrideBy === undefined ? "held" : "reviewHeld";
+
+          return event.at >= context.lastAt
             ? move(
                 context,
-                event.verdict === "approve" ? "armed" : "held",
+                event.verdict === "approve" ? "armed" : heldState,
                 event.at,
                 "reviewed",
                 event.by
               )
+            : undefined;
+        },
+      },
+    },
+    reviewHeld: {
+      on: {
+        override: ({ context, event }) =>
+          event.by === context.overrideBy && event.at >= context.lastAt
+            ? overrideReview(context, event)
             : undefined,
       },
     },
