@@ -65,6 +65,7 @@ export interface TrainContext {
   readonly trainLabel: string;
   readonly ignoredChecks: readonly string[];
   readonly candidateIgnoredChecks?: readonly string[];
+  readonly candidateRequiredChecks?: readonly (readonly string[])[];
   readonly requireUpToDate?: boolean;
   readonly train: number;
   readonly maxCars: number;
@@ -417,6 +418,7 @@ export const trainMachine = setupEffect({
     bisect: undefined,
     build: undefined,
     candidateIgnoredChecks: input.candidateIgnoredChecks ?? [],
+    candidateRequiredChecks: input.candidateRequiredChecks ?? [],
     cars: [],
     checks: [],
     ciDeadlineAt: undefined,

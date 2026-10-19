@@ -97,6 +97,9 @@ export type Rank = typeof RankSchema.Type;
 
 export const TrainInputSchema = Schema.Struct({
   candidateIgnoredChecks: Schema.optionalKey(Schema.Array(Schema.String)),
+  candidateRequiredChecks: Schema.optionalKey(
+    Schema.Array(Schema.NonEmptyArray(Schema.String))
+  ),
   ciTimeoutMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(60_000)),
   ignoredChecks: Schema.Array(Schema.String),
   maxCars: Schema.Int.check(

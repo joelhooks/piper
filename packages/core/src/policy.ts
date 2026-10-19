@@ -15,6 +15,8 @@ export interface RepoRules {
 
   readonly candidateIgnoredChecks?: readonly string[];
 
+  readonly candidateRequiredChecks?: readonly (readonly string[])[];
+
   readonly requireUpToDate?: boolean;
 }
 
@@ -103,17 +105,44 @@ export const verdictOn = (
     : Verdict.Pending();
 };
 
+const boardingGreen = (candidate: Candidate, rules: RepoRules): boolean => {
+  const ignored = [
+    ...rules.ignoredChecks,
+    ...(rules.candidateIgnoredChecks ?? []),
+  ];
+
+  const required = rules.candidateRequiredChecks ?? [];
+
+  if (required.length === 0) {
+    return Predicate.isTagged(
+      verdictOn(candidate.headSha, candidate.checks, ignored),
+      "Green"
+    );
+  }
+
+  const runs = latestRuns(candidate.checks).filter(
+    (run) => run.headSha === candidate.headSha
+  );
+
+  const passed = (name: string) =>
+    runs.some(
+      (run) =>
+        run.name === name &&
+        run.status === "completed" &&
+        (run.conclusion === "success" || run.conclusion === "neutral")
+    );
+
+  return (
+    required.some((group) => group.length > 0 && group.every(passed)) &&
+    !runs.some((run) => !ignored.includes(run.name) && isFailed(run))
+  );
+};
+
 export const isEligible = (candidate: Candidate, rules: RepoRules): boolean =>
   candidate.labels.includes(rules.trainLabel) &&
   candidate.operatorReviewed &&
   (rules.requireUpToDate === false || candidate.upToDate) &&
-  Predicate.isTagged(
-    verdictOn(candidate.headSha, candidate.checks, [
-      ...rules.ignoredChecks,
-      ...(rules.candidateIgnoredChecks ?? []),
-    ]),
-    "Green"
-  );
+  boardingGreen(candidate, rules);
 
 export const selectCars = (
   pool: readonly Candidate[],

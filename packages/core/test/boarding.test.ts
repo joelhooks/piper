@@ -61,4 +61,76 @@ describe("boarding checks", () => {
     expect(isEligible(green, rules)).toBe(false);
     expect(isEligible(green, { ...rules, requireUpToDate: false })).toBe(true);
   });
+
+  it("boards when any required group passes while other checks still run, but never past a finished failure", () => {
+    const run = (
+      name: string,
+      status: "completed" | "in_progress",
+      conclusion: "success" | "failure" | "skipped" | null
+    ) => ({ conclusion, headSha: head, name, status });
+
+    const rules = {
+      candidateRequiredChecks: [
+        ["light suites", "mode"],
+        ["full light", "mode"],
+      ],
+      ignoredChecks: ["advisory"],
+      trainLabel: "train",
+    };
+
+    const car = (checks: Candidate["checks"]) => ({ ...candidate, checks });
+    const mode = run("mode", "completed", "success");
+
+    expect(
+      isEligible(
+        car([
+          run("light suites", "completed", "success"),
+          mode,
+          run("side coverage", "in_progress", null),
+          run("advisory", "completed", "failure"),
+        ]),
+        rules
+      )
+    ).toBe(true);
+    expect(
+      isEligible(
+        car([
+          run("light suites", "completed", "skipped"),
+          run("full light", "completed", "success"),
+          mode,
+          run("side coverage", "in_progress", null),
+        ]),
+        rules
+      )
+    ).toBe(true);
+    expect(
+      isEligible(
+        car([run("light suites", "completed", "skipped"), mode]),
+        rules
+      )
+    ).toBe(false);
+    expect(
+      isEligible(
+        car([
+          run("light suites", "completed", "success"),
+          mode,
+          run("side coverage", "completed", "failure"),
+        ]),
+        rules
+      )
+    ).toBe(false);
+    expect(
+      isEligible(car([run("light suites", "in_progress", null), mode]), rules)
+    ).toBe(false);
+    expect(
+      isEligible(
+        car([
+          run("light suites", "completed", "success"),
+          mode,
+          run("side coverage", "in_progress", null),
+        ]),
+        { ...rules, candidateRequiredChecks: [] }
+      )
+    ).toBe(false);
+  });
 });
