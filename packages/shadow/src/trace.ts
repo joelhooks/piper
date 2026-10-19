@@ -7,6 +7,7 @@ import type { Pull } from "./feed.js";
 import { PullSchema, readPages } from "./feed.js";
 
 export interface TraceQuery {
+  readonly members?: readonly number[];
   readonly repo: string;
   readonly train: number;
   readonly pr: number;
@@ -115,6 +116,7 @@ const labelActions = Effect.fn("Shadow.labelActions")(function* labelActions(
     ...[...(pull.body ?? "").matchAll(/(?:Cars:|,)\s*(?<pr>\d+)/gu)].map(
       (match) => Number(match.groups?.pr)
     ),
+    ...(query.members ?? []),
     ...(yield* carOwners(query, cars)),
   ]);
 

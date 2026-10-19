@@ -110,6 +110,64 @@ describe("read-only adapters", () => {
   );
 
   it.effect(
+    "uses members recorded while the train was building once the car commits point at the train",
+    () =>
+      Effect.gen(function* test() {
+        const responses = new Map<string, unknown>([
+          ["/pulls/3", { ...pull, body: "Members: car-a" }],
+          [
+            "/pulls/3/commits?&per_page=100&page=1",
+            [commit("train-head", ["base-a", "car-a"])],
+          ],
+          [
+            "/commits/car-a/pulls",
+            [
+              {
+                ...pull,
+                head: { ref: "train/1", sha: "train-head" },
+                number: 3,
+              },
+            ],
+          ],
+          [
+            "/issues/3/timeline?&per_page=100&page=1",
+            [unlabeled("2026-01-01T00:10:05Z")],
+          ],
+          [
+            "/issues/1/timeline?&per_page=100&page=1",
+            [unlabeled("2026-01-01T00:10:10Z")],
+          ],
+          [
+            "/actions/runs?head_sha=train-head&per_page=100",
+            { total_count: 0, workflow_runs: [] },
+          ],
+          [
+            "/commits/merge-result",
+            commit("merge-result", ["new-main", "train-head"]),
+          ],
+        ]);
+
+        const trace = yield* OperatorTrace.use((tracePort) =>
+          tracePort.read({
+            base: "base-a",
+            members: [1],
+            pr: 3,
+            repo: "sample/project",
+            since: "2025-12-31T00:00:00Z",
+            train: 1,
+          })
+        ).pipe(
+          Effect.provide(OperatorTrace.github),
+          Effect.provideService(GitHub, fake(responses))
+        );
+
+        expect(
+          trace.actions.find((action) => action.kind === "RemoveLabels")
+        ).toMatchObject({ prs: [1, 3] });
+      })
+  );
+
+  it.effect(
     "derives car order from merge parents and tested head from the merge, not current branch",
     () =>
       Effect.gen(function* test() {

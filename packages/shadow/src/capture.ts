@@ -231,8 +231,19 @@ export const capturePoll = Effect.fn("Shadow.capturePoll")(
 
     const base = previous?.view.build?.base ?? main ?? "unknown";
 
+    const members = [
+      ...new Set(
+        recording.frames.flatMap((frame) =>
+          frame.events.flatMap((event) =>
+            Predicate.isTagged(event, "built") ? event.merged : []
+          )
+        )
+      ),
+    ];
+
     const current = yield* tracePort.read({
       base,
+      members,
       pr,
       repo: input.repo,
       since: recording.since,
