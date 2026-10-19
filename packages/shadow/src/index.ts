@@ -1,4 +1,9 @@
-export { capturePoll, captureReads, discoverTrains } from "./capture.js";
+export {
+  capturePoll,
+  captureReads,
+  discoverTrains,
+  readRecentPulls,
+} from "./capture.js";
 
 export { compare } from "./compare.js";
 

@@ -1,11 +1,11 @@
 import { ExecutorError } from "@joelhooks/piper-executor/domain";
 import { GitHub } from "@joelhooks/piper-executor/github";
 import type { PostedEvent } from "@joelhooks/piper/domain";
-import { Data, Effect, Predicate } from "effect";
+import { Data, Effect, Predicate, Schema } from "effect";
 
 import type { Frame, RawRead, Recording, Trace } from "./domain.js";
 import type { Pull } from "./feed.js";
-import { GitHubFeed, PullSchema, readPages } from "./feed.js";
+import { GitHubFeed, PullSchema } from "./feed.js";
 import { runRecording } from "./runner.js";
 import { OperatorTrace } from "./trace.js";
 
@@ -50,30 +50,61 @@ export const captureReads = (
   }),
 });
 
+export const readRecentPulls = Effect.fn("Shadow.readRecentPulls")(
+  function* readRecentPulls(repo: string, since: string) {
+    const github = yield* GitHub;
+    const values: Pull[] = [];
+
+    for (let page = 1; page <= 10; page += 1) {
+      const batch = yield* Schema.decodeUnknownEffect(Schema.Array(PullSchema))(
+        yield* github.read(
+          repo,
+          `/pulls?state=all&sort=created&direction=desc&per_page=100&page=${page}`
+        )
+      );
+
+      values.push(...batch);
+
+      const oldest = batch.at(-1);
+
+      if (
+        batch.length < 100 ||
+        oldest === undefined ||
+        oldest.created_at < since
+      ) {
+        return values;
+      }
+    }
+
+    return yield* new ExecutorError({
+      code: "provider",
+      message: "Recent pulls exceed ten pages; refusing incomplete history",
+    });
+  }
+);
+
 export const discoverTrains = Effect.fn("Shadow.discoverTrains")(
   function* discoverTrains(repo: string, since: string) {
-    const pulls = yield* readPages(
-      repo,
-      "/pulls?state=all&sort=created&direction=asc",
-      PullSchema
-    );
+    const pulls = yield* readRecentPulls(repo, since);
 
-    return pulls.flatMap((pull) => {
-      const number = /^train\/(?<train>[1-9][0-9]*)$/u.exec(pull.head.ref)
-        ?.groups?.train;
+    return pulls
+      .flatMap((pull) => {
+        const number = /^train\/(?<train>[1-9][0-9]*)$/u.exec(pull.head.ref)
+          ?.groups?.train;
 
-      return number === undefined || pull.created_at < since
-        ? []
-        : [{ pull, train: Number(number) }];
-    });
+        return number === undefined || pull.created_at < since
+          ? []
+          : [{ pull, train: Number(number) }];
+      })
+      .toSorted((left, right) => left.train - right.train);
   }
 );
 
 const buildEvents = (
   previous: Report,
   trace: Trace,
-  pulls: readonly Pull[],
-  pr: number,
+  trainPull: Pull,
+  owners: ReadonlyMap<string, readonly number[]>,
   at: number
 ): PostedEvent[] => {
   const { build } = previous.view;
@@ -82,20 +113,15 @@ const buildEvents = (
     (action) => action.kind === "BuildTrain" && action.head === build?.base
   );
 
-  const trainPull = pulls.find((pull) => pull.number === pr);
-
   if (
     build === undefined ||
     observed?.cars === undefined ||
-    trainPull === undefined ||
     previous.view.head === trainPull.head.sha
   ) {
     return [];
   }
 
-  const merged = observed.cars.flatMap((head) =>
-    pulls.flatMap((pull) => (pull.head.sha === head ? [pull.number] : []))
-  );
+  const merged = observed.cars.flatMap((head) => owners.get(head) ?? []);
 
   return merged.length === observed.cars.length
     ? [
@@ -205,14 +231,39 @@ export const capturePoll = Effect.fn("Shadow.capturePoll")(
     if (previous === undefined) {
       events.push(posted.depart({ at }));
     } else {
-      const pulls = yield* readPages(
-        input.repo,
-        "/pulls?state=all&sort=created&direction=asc",
-        PullSchema
-      ).pipe(Effect.provideService(GitHub, captured));
+      const lookup = Effect.gen(function* lookup() {
+        const trainPull = yield* Schema.decodeUnknownEffect(PullSchema)(
+          yield* captured.read(input.repo, `/pulls/${pr}`)
+        );
+
+        const cars = new Set(
+          current.actions.flatMap((action) =>
+            action.kind === "BuildTrain" ? (action.cars ?? []) : []
+          )
+        );
+
+        const owners = new Map<string, readonly number[]>();
+
+        for (const head of cars) {
+          const associated = yield* Schema.decodeUnknownEffect(
+            Schema.Array(PullSchema)
+          )(yield* captured.read(input.repo, `/commits/${head}/pulls`));
+
+          owners.set(
+            head,
+            associated.flatMap((pull) =>
+              pull.head.sha === head ? [pull.number] : []
+            )
+          );
+        }
+
+        return { owners, trainPull };
+      });
+
+      const { owners, trainPull } = yield* lookup;
 
       events.push(
-        ...buildEvents(previous, current, pulls, pr, at),
+        ...buildEvents(previous, current, trainPull, owners, at),
         ...observationEvents(previous, current, main, pr, at)
       );
     }
