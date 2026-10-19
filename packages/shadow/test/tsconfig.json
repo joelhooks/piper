@@ -6,9 +6,14 @@
         "name": "@effect/language-service",
         "allowedUnstableApis": [
           "effect/Arbitrary",
+          "effect/cli/Command",
+          "effect/cli/Flag",
+          "effect/http/FetchHttpClient",
           "effect/http/HttpClient",
           "effect/http/HttpClientResponse",
-          "effect/http/HttpClientRequest"
+          "effect/http/HttpClientRequest",
+          "effect/process/ChildProcess",
+          "effect/process/ChildProcessSpawner"
         ]
       }
     ]

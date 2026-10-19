@@ -87,11 +87,11 @@ export const shadowGitHub = (intervalMs = 2000, minimum = 0.2) =>
           });
         }
 
-        const token = yield* tokens.token;
         yield* Effect.sleep(
           Math.max(0, next - (yield* Clock.currentTimeMillis))
         );
         next = (yield* Clock.currentTimeMillis) + intervalMs;
+        const token = yield* tokens.token;
 
         const response = yield* client
           .execute(

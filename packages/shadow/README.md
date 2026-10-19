@@ -21,6 +21,14 @@ pnpm shadow --repo sample/project --since 2026-01-01T00:00:00Z \
   --read-interval-ms 2000 --min-rate-fraction 0.2
 ```
 
+### Renewable observation tokens
+
+For long observations, use `--token-command /absolute/path/to/executable` instead of `GITHUB_TOKEN`. The executable receives no arguments and runs directly, without a shell. It must exit successfully and write only the token to stdout. Leading and trailing whitespace is removed. Stdin and stderr are ignored. Give the command read-only repository access; the observer still uses GET only.
+
+The token stays in memory. Its assumed lifetime defaults to 50 minutes. `--token-ttl-ms <positive-integer>` overrides that lifetime; choose a value no longer than the issuer's actual lifetime. The next read renews the token once 90% of the lifetime has elapsed, before sending a request. Idle observations do not start a background renewal process. Concurrent reads share one mint. A failed, unsuccessful, or empty mint stops the run with a typed error; it does not fall back to an older token. Successful reads and existing train recordings remain preserved by the normal interrupted-run path.
+
+Do not set `GITHUB_TOKEN` with `--token-command`. The expiry environment variable applies only to environment tokens. Neither tokens nor the command path enter recordings or provider error messages. Replay never constructs or invokes a token command.
+
 The record directory must be new. Its parent must exist. The recorder resolves symlinks in the parent and rejects a `.git` ancestor, including worktrees. It creates the directory with mode `0700` and train JSON files with mode `0600`. Do not commit real recordings, trace files, CLI output, or event files. The CLI writes structured reports to stdout, which is private too.
 
 Polling starts once and then waits 60 seconds after each pass. All HTTP reads share a minimum interval, default 2000 milliseconds. A small XState machine owns read, backoff and completion; Effect owns HTTP, time, tokens and recording. It honours numeric and HTTP-date `Retry-After` values on 403/429, with a 60-second fallback and at most four attempts. Exhaustion exits nonzero. When `x-ratelimit-remaining / x-ratelimit-limit` falls below `--min-rate-fraction`, default `0.2`, it stops without retrying. The last successful response is retained before that stop. `partial.json` preserves successful network reads so far. Existing train files retain their last completed frame. A first partial train has an empty frame list and cannot earn a match.
