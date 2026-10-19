@@ -227,6 +227,43 @@ describe("capture poll ordering", () => {
       })
   );
 
+  it.effect(
+    "a resumed trace keeps one copy of a build whose keys arrive in a different order",
+    () =>
+      Effect.gen(function* test() {
+        const build =
+          traceAt(1).actions[0] ?? (yield* Effect.die("Missing build"));
+
+        expect(build.kind).toBe("BuildTrain");
+
+        const { at, slot, source, ...rest } = build;
+        const reordered = { at, ...rest, slot, source };
+
+        expect(Object.keys(reordered)).not.toEqual(Object.keys(build));
+
+        const captured = yield* capturePoll(
+          {
+            ...initial,
+            trace: { ...initial.trace, actions: [reordered] },
+          },
+          2,
+          times[0] ?? start
+        ).pipe(
+          Effect.provideService(GitHub, captureReads(github(responses), [])),
+          Effect.provideService(GitHubFeed, feed),
+          Effect.provideService(OperatorTrace, {
+            read: () => Effect.succeed(traceAt(1)),
+          })
+        );
+
+        expect(
+          captured.recording.trace.actions.filter(
+            (action) => action.kind === "BuildTrain"
+          )
+        ).toHaveLength(1);
+      })
+  );
+
   it.effect("capture does not predict a merge without opt-in GO", () =>
     Effect.gen(function* test() {
       const { recording, report } = yield* scenario();

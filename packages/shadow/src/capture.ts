@@ -172,6 +172,15 @@ const observationEvents = (
   return events;
 };
 
+const observationKey = (
+  observation: Omit<Trace["actions"][number], "slot">
+): string =>
+  JSON.stringify(
+    Object.entries(observation).toSorted(([left], [right]) =>
+      left.localeCompare(right)
+    )
+  );
+
 const accumulateTrace = (previous: Trace, current: Trace): Trace => {
   const unique = new Map<string, Trace["actions"][number]>();
 
@@ -180,7 +189,7 @@ const accumulateTrace = (previous: Trace, current: Trace): Trace => {
     ...current.actions,
   ]) {
     const { slot, ...observation } = action;
-    unique.set(JSON.stringify(observation), { ...observation, slot });
+    unique.set(observationKey(observation), { ...observation, slot });
   }
 
   return {
