@@ -11,6 +11,18 @@ import { executeRelease } from "./release.js";
 import type { Settings } from "./services.js";
 import { GitHubWrites } from "./writes.js";
 
+const MarkedReady = Schema.Struct({
+  data: Schema.Struct({
+    markPullRequestReadyForReview: Schema.Struct({
+      pullRequest: Schema.Struct({ id: Schema.String }),
+    }),
+  }),
+});
+
+const GraphQlErrors = Schema.Struct({
+  errors: Schema.NonEmptyArray(Schema.Struct({ message: Schema.String })),
+});
+
 const events = Data.taggedEnum<Event>();
 
 export class Judge extends Context.Service<
@@ -460,15 +472,21 @@ const executeTrain = Effect.fn("Executor.train")(function* executeTrain(
       );
 
       if (settings.mode === "live") {
-        yield* decode(
-          Schema.Struct({
-            data: Schema.Struct({
-              markPullRequestReadyForReview: Schema.Struct({
-                pullRequest: Schema.Struct({ id: Schema.String }),
-              }),
-            }),
-          })
-        )(responses[0]);
+        yield* decode(MarkedReady)(responses[0]).pipe(
+          Effect.catchTag("ExecutorError", (error) =>
+            Schema.decodeUnknownEffect(GraphQlErrors)(responses[0]).pipe(
+              Effect.mapError(() => error),
+              Effect.flatMap(({ errors }) =>
+                Effect.fail(
+                  new ExecutorError({
+                    code: "provider",
+                    message: `GraphQL errors: ${errors.map((item) => item.message).join("; ")}`,
+                  })
+                )
+              )
+            )
+          )
+        );
       }
 
       return applied(settings);

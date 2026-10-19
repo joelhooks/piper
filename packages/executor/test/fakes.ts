@@ -199,6 +199,7 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     conflict: false,
     crash: false,
     failPost: false,
+    graphqlErrors: false,
     head: HEAD,
     labelMissing: false,
     refMissing: false,
@@ -297,11 +298,16 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     }
 
     if (operation.path === "/graphql") {
-      return {
-        data: {
-          markPullRequestReadyForReview: { pullRequest: { id: "node-3" } },
-        },
-      };
+      return controls.graphqlErrors
+        ? {
+            data: null,
+            errors: [{ message: "Resource not accessible by integration" }],
+          }
+        : {
+            data: {
+              markPullRequestReadyForReview: { pullRequest: { id: "node-3" } },
+            },
+          };
     }
 
     return null;

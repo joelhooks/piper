@@ -15,6 +15,7 @@ import * as Arbitrary from "effect/Arbitrary";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
 
+import { ExecutorError } from "../src/domain.js";
 import { drain, runOnce } from "../src/drain.js";
 import { execute } from "../src/execute.js";
 import { GitHub } from "../src/github.js";
@@ -245,6 +246,28 @@ describe("executor intent translation", () => {
         "DELETE /issues/1/labels/train",
         "DELETE /issues/3/labels/train",
       ]);
+    })
+  );
+
+  it.effect("live mark ready names GitHub's GraphQL errors", () =>
+    Effect.gen(function* graphqlErrors() {
+      const job = train({ at: 1, id: "train-1/10", kind: "MarkReady", pr: 3 });
+
+      const fixture = fake([job]);
+      fixture.controls.graphqlErrors = true;
+
+      const outcome = yield* execute(job, live).pipe(
+        Effect.provide(fixture.layer)
+      );
+
+      expect(outcome).toStrictEqual({
+        error: new ExecutorError({
+          code: "provider",
+          message: "GraphQL errors: Resource not accessible by integration",
+        }),
+        events: [],
+        status: "failed",
+      });
     })
   );
 
