@@ -84,13 +84,43 @@ const buildAction = (
   return [];
 };
 
+const carOwners = Effect.fn("Shadow.carOwners")(function* carOwners(
+  query: TraceQuery,
+  cars: readonly string[]
+) {
+  const github = yield* GitHub;
+  const owners: number[] = [];
+
+  for (const car of cars) {
+    const pulls = yield* Schema.decodeUnknownEffect(Schema.Array(PullSchema))(
+      yield* github.read(query.repo, `/commits/${car}/pulls`)
+    );
+
+    owners.push(
+      ...pulls.flatMap((owner) =>
+        owner.head.sha === car ? [owner.number] : []
+      )
+    );
+  }
+
+  return owners;
+});
+
 const labelActions = Effect.fn("Shadow.labelActions")(function* labelActions(
   query: TraceQuery,
-  pull: Pull
+  pull: Pull,
+  cars: readonly string[]
 ) {
-  const members = [
-    ...(pull.body ?? "").matchAll(/(?:Cars:|,)\s*(?<pr>\d+)/gu),
-  ].map((match) => Number(match.groups?.pr));
+  const members = new Set([
+    ...[...(pull.body ?? "").matchAll(/(?:Cars:|,)\s*(?<pr>\d+)/gu)].map(
+      (match) => Number(match.groups?.pr)
+    ),
+    ...(yield* carOwners(query, cars)),
+  ]);
+
+  members.delete(query.pr);
+
+  const since = query.since > pull.created_at ? query.since : pull.created_at;
 
   const changes = new Map<
     string,
@@ -108,7 +138,7 @@ const labelActions = Effect.fn("Shadow.labelActions")(function* labelActions(
       if (
         change.event === "unlabeled" &&
         change.created_at !== undefined &&
-        change.created_at >= query.since &&
+        change.created_at >= since &&
         change.label !== undefined
       ) {
         const label = change.label.name;
@@ -119,7 +149,10 @@ const labelActions = Effect.fn("Shadow.labelActions")(function* labelActions(
           changes.set(label, { at, label, prs: [member] });
         } else {
           existing.at = Math.max(existing.at, at);
-          existing.prs.push(member);
+
+          if (!existing.prs.includes(member)) {
+            existing.prs.push(member);
+          }
         }
       }
     }
@@ -243,7 +276,13 @@ export const readGitHubTrace = Effect.fn("Shadow.githubTrace")(
         slot: 0,
         source: "github:pull",
       },
-      ...(yield* labelActions(query, pull)),
+      ...(yield* labelActions(
+        query,
+        pull,
+        actions.flatMap((action) =>
+          action.kind === "BuildTrain" ? (action.cars ?? []) : []
+        )
+      )),
       ...(yield* rerunActions(query, pull.head.sha))
     );
 

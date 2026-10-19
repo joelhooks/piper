@@ -38,7 +38,77 @@ const commit = (sha: string, parents: readonly string[]) => ({
   sha,
 });
 
+const unlabeled = (at: string) => ({
+  created_at: at,
+  event: "unlabeled",
+  label: { name: "hold" },
+});
+
 describe("read-only adapters", () => {
+  it.effect(
+    "finds label removals on members named only by the merged car commits",
+    () =>
+      Effect.gen(function* test() {
+        const responses = new Map<string, unknown>([
+          ["/pulls/3", { ...pull, body: "Members: car-a" }],
+          [
+            "/pulls/3/commits?&per_page=100&page=1",
+            [commit("train-head", ["base-a", "car-a"])],
+          ],
+          [
+            "/commits/car-a/pulls",
+            [
+              { ...pull, head: { ref: "a", sha: "car-a" }, number: 1 },
+              { ...pull, head: { ref: "x", sha: "other" }, number: 9 },
+            ],
+          ],
+          [
+            "/issues/3/timeline?&per_page=100&page=1",
+            [unlabeled("2026-01-01T00:10:05Z")],
+          ],
+          [
+            "/issues/1/timeline?&per_page=100&page=1",
+            [
+              unlabeled("2025-12-31T23:59:00Z"),
+              unlabeled("2026-01-01T00:10:10Z"),
+              unlabeled("2026-01-01T00:10:11Z"),
+            ],
+          ],
+          [
+            "/actions/runs?head_sha=train-head&per_page=100",
+            { total_count: 0, workflow_runs: [] },
+          ],
+          [
+            "/commits/merge-result",
+            commit("merge-result", ["new-main", "train-head"]),
+          ],
+        ]);
+
+        const trace = yield* OperatorTrace.use((tracePort) =>
+          tracePort.read({
+            base: "base-a",
+            pr: 3,
+            repo: "sample/project",
+            since: "2025-12-31T00:00:00Z",
+            train: 1,
+          })
+        ).pipe(
+          Effect.provide(OperatorTrace.github),
+          Effect.provideService(GitHub, fake(responses))
+        );
+
+        expect(
+          trace.actions.filter((action) => action.kind === "RemoveLabels")
+        ).toEqual([
+          expect.objectContaining({
+            at: Date.parse("2026-01-01T00:10:11Z"),
+            label: "hold",
+            prs: [1, 3],
+          }),
+        ]);
+      })
+  );
+
   it.effect(
     "derives car order from merge parents and tested head from the merge, not current branch",
     () =>
@@ -55,6 +125,14 @@ describe("read-only adapters", () => {
           ["/issues/3/timeline?&per_page=100&page=1", []],
           ["/issues/1/timeline?&per_page=100&page=1", []],
           ["/issues/2/timeline?&per_page=100&page=1", []],
+          [
+            "/commits/car-a/pulls",
+            [{ ...pull, head: { ref: "a", sha: "car-a" }, number: 1 }],
+          ],
+          [
+            "/commits/car-b/pulls",
+            [{ ...pull, head: { ref: "b", sha: "car-b" }, number: 2 }],
+          ],
           [
             "/actions/runs?head_sha=train-head&per_page=100",
             { total_count: 0, workflow_runs: [] },
