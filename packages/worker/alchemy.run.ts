@@ -10,6 +10,7 @@ export interface Settings {
   readonly maxCars?: number;
   readonly requireReadAuth?: boolean;
   readonly trainLabel?: string;
+  readonly workerName?: string;
 }
 
 export const infrastructure = (settings: Settings = {}) =>
@@ -28,6 +29,7 @@ export const infrastructure = (settings: Settings = {}) =>
         TRAIN_LABEL: settings.trainLabel ?? "train",
       },
       main: new URL("src/index.ts", import.meta.url).pathname,
+      name: settings.workerName ?? "piper",
     });
 
     return { worker };
