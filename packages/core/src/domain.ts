@@ -106,6 +106,7 @@ export const TrainInputSchema = Schema.Struct({
     Schema.isBetween({ maximum: 120_000, minimum: 60_000 })
   ),
   repo: Schema.NonEmptyString,
+  requireUpToDate: Schema.optionalKey(Schema.Boolean),
   train: PrNumber,
   trainLabel: Schema.NonEmptyString,
 });

@@ -40,7 +40,7 @@ Both machines append intents to an outbox and facts to a ledger. An external exe
 
 The host helpers are storage-independent. They restore with `createEffectActor(machine, { snapshot })`, deliver events, and wait for a mailbox barrier before returning a persisted snapshot. Deadlines and poll times live in context. An integration reads the next alarm time and posts a `tick`; there are no process-local timers to restore.
 
-Repository settings are explicit inputs: `trainLabel`, `ignoredChecks`, and `aggregateChecks`. The synthetic examples use `train`, `branch-current`, and `checks`. These names carry no provider-specific policy. A train input may also list `candidateIgnoredChecks`: checks ignored only when deciding whether a car may board. Use it for a gate that is red by design on pull requests and only means something on the train head, such as a full-suite rollup. The train head is still judged on it.
+Repository settings are explicit inputs: `trainLabel`, `ignoredChecks`, and `aggregateChecks`. The synthetic examples use `train`, `branch-current`, and `checks`. These names carry no provider-specific policy. A train input may also list `candidateIgnoredChecks`: checks ignored only when deciding whether a car may board. Use it for a gate that is red by design on pull requests and only means something on the train head, such as a full-suite rollup. The train head is still judged on it. `requireUpToDate: false` lets a car board when its branch is behind main. The train branch merges every car onto main, so the train head's CI still judges the combined code.
 
 ## Plan graph
 

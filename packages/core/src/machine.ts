@@ -65,6 +65,7 @@ export interface TrainContext {
   readonly trainLabel: string;
   readonly ignoredChecks: readonly string[];
   readonly candidateIgnoredChecks?: readonly string[];
+  readonly requireUpToDate?: boolean;
   readonly train: number;
   readonly maxCars: number;
   readonly pollMs: number;
@@ -439,6 +440,7 @@ export const trainMachine = setupEffect({
     red: undefined,
     rejected: [],
     repo: input.repo,
+    requireUpToDate: input.requireUpToDate ?? true,
     reruns: [],
     sync: 0,
     train: input.train,

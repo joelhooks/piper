@@ -46,4 +46,19 @@ describe("boarding checks", () => {
   it("still judges the train head on the boarding-ignored check", () => {
     expect(verdictOn(head, candidate.checks, [])._tag).toBe("Red");
   });
+
+  it("boards a car behind main only when the rules allow it", () => {
+    const behind = { ...candidate, checks: [], upToDate: false };
+    const rules = { ignoredChecks: [], trainLabel: "train" };
+
+    const green = {
+      ...behind,
+      checks: [candidate.checks[0]].flatMap((run) =>
+        run === undefined ? [] : [run]
+      ),
+    };
+
+    expect(isEligible(green, rules)).toBe(false);
+    expect(isEligible(green, { ...rules, requireUpToDate: false })).toBe(true);
+  });
 });

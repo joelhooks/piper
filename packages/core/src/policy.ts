@@ -14,6 +14,8 @@ export interface RepoRules {
   readonly ignoredChecks: readonly string[];
 
   readonly candidateIgnoredChecks?: readonly string[];
+
+  readonly requireUpToDate?: boolean;
 }
 
 export const RERUN_BELOW_P = 0.2;
@@ -104,7 +106,7 @@ export const verdictOn = (
 export const isEligible = (candidate: Candidate, rules: RepoRules): boolean =>
   candidate.labels.includes(rules.trainLabel) &&
   candidate.operatorReviewed &&
-  candidate.upToDate &&
+  (rules.requireUpToDate === false || candidate.upToDate) &&
   Predicate.isTagged(
     verdictOn(candidate.headSha, candidate.checks, [
       ...rules.ignoredChecks,
