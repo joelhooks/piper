@@ -38,7 +38,65 @@ const accepted = (head: string): Trace => ({
   complete: true,
 });
 
+const ready = (head: string): ActionValues => ({
+  head,
+  kind: "MarkReady",
+  prs: [1],
+});
+
 describe("shadow evidence invariants", () => {
+  it.prop(
+    "a merge satisfies an omitted ready step only for the same head and PR",
+    { head: heads },
+    ({ head }) => {
+      expect(compare([ready(head), merge(head)], accepted(head)).status).toBe(
+        "match"
+      );
+      expect(
+        compare([ready(`${head}-other`), merge(head)], accepted(head)).status
+      ).toBe("diff");
+      expect(
+        compare([{ ...ready(head), prs: [2] }, merge(head)], accepted(head))
+          .status
+      ).toBe("diff");
+      expect(
+        compare([ready(head), merge(head)], { ...accepted(head), actions: [] })
+          .status
+      ).toBe("diff");
+    }
+  );
+
+  it.prop(
+    "an explicit ready observation is still checked",
+    { head: heads },
+    ({ head }) => {
+      const trace = accepted(head);
+
+      const explicit = {
+        ...ready(head),
+        at: 0,
+        slot: 0,
+        source: "synthetic:operator-log",
+      };
+
+      expect(
+        compare([ready(head), merge(head)], {
+          ...trace,
+          actions: [explicit, { ...observed(head), slot: 1 }],
+        }).status
+      ).toBe("match");
+      expect(
+        compare([ready(head), merge(head)], {
+          ...trace,
+          actions: [
+            { ...explicit, head: `${head}-other` },
+            { ...observed(head), slot: 1 },
+          ],
+        }).status
+      ).toBe("diff");
+    }
+  );
+
   it.prop(
     "an exact head and explicit acceptance match",
     { head: heads },

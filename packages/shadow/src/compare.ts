@@ -150,6 +150,22 @@ const comparisonStatus = (
   return pending.length > 0 ? "pending" : "match";
 };
 
+const readyImpliedByMerge = (action: ActionValues, trace: Trace): boolean =>
+  action.kind === "MarkReady" &&
+  action.head !== undefined &&
+  action.prs !== undefined &&
+  !trace.actions.some(
+    (item) =>
+      item.kind === "MarkReady" &&
+      (item.head === action.head || equal(item.prs, action.prs))
+  ) &&
+  trace.actions.some(
+    (item) =>
+      item.kind === "Merge" &&
+      item.head === action.head &&
+      equal(item.prs, action.prs)
+  );
+
 export const compare = (
   expected: readonly ActionValues[],
   trace: Trace
@@ -166,7 +182,11 @@ export const compare = (
   const pending = acceptancePending(expected, trace);
   const used = new Set<number>();
 
-  for (const [index, action] of expected.entries()) {
+  const comparable = expected.filter(
+    (action) => !readyImpliedByMerge(action, trace)
+  );
+
+  for (const [index, action] of comparable.entries()) {
     const exact = groups.findIndex(
       (group, position) =>
         !used.has(position) &&

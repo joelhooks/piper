@@ -40,6 +40,7 @@ const EventsSchema = Schema.Array(
 export const command = Command.make(
   "piper-shadow",
   {
+    autoGoBy: Flag.String("auto-go-by").pipe(Flag.withDefault("")),
     events: Flag.String("events").pipe(Flag.withDefault("")),
     minRateFraction: Flag.Finite("min-rate-fraction").pipe(
       Flag.withDefault(0.2)
@@ -199,7 +200,11 @@ export const command = Command.make(
           train.pull.number,
           at,
           events,
-          reads
+          reads,
+          {
+            autoGo:
+              options.autoGoBy === "" ? undefined : { by: options.autoGoBy },
+          }
         ).pipe(Effect.provide(readers));
 
         let { trace } = captured.recording;

@@ -141,16 +141,24 @@ const observationEvents = (
   trace: Trace,
   main: string | undefined,
   pr: number,
-  at: number
+  at: number,
+  supplied: readonly PostedEvent[],
+  autoGo: { readonly by: string } | undefined
 ): PostedEvent[] => {
   const events: PostedEvent[] = [];
 
-  if (main !== undefined && main !== previous.view.main) {
-    events.push(posted.mainMoved({ at, main }));
-  }
-
   if (previous.view.pr === undefined && previous.view.head !== undefined) {
     events.push(posted.prOpened({ at, pr }));
+  }
+
+  events.push(posted.tick({ at }), ...supplied);
+
+  if (autoGo !== undefined && previous.view.head !== undefined) {
+    events.push(posted.go({ at, by: autoGo.by, head: previous.view.head }));
+  }
+
+  if (main !== undefined && main !== previous.view.main) {
+    events.push(posted.mainMoved({ at, main }));
   }
 
   const merged = trace.actions.find((action) => action.kind === "Merge");
@@ -160,8 +168,6 @@ const observationEvents = (
       posted.merged({ at, head: merged.head, mergeSha: merged.mergeSha })
     );
   }
-
-  events.push(posted.tick({ at }));
 
   return events;
 };
@@ -191,7 +197,10 @@ export const capturePoll = Effect.fn("Shadow.capturePoll")(
     pr: number,
     at: number,
     supplied: readonly PostedEvent[] = [],
-    reads: RawRead[] = []
+    reads: RawRead[] = [],
+    options: {
+      readonly autoGo?: { readonly by: string } | undefined;
+    } = {}
   ) {
     const captured = yield* GitHub;
     const feedPort = yield* GitHubFeed;
@@ -228,8 +237,12 @@ export const capturePoll = Effect.fn("Shadow.capturePoll")(
       ...feed,
     ];
 
+    const operatorEvents = supplied.filter(
+      (event) => !Predicate.isTagged(event, "plan")
+    );
+
     if (previous === undefined) {
-      events.push(posted.depart({ at }));
+      events.push(posted.depart({ at }), ...operatorEvents);
     } else {
       const lookup = Effect.gen(function* lookup() {
         const trainPull = yield* Schema.decodeUnknownEffect(PullSchema)(
@@ -264,13 +277,18 @@ export const capturePoll = Effect.fn("Shadow.capturePoll")(
 
       events.push(
         ...buildEvents(previous, current, trainPull, owners, at),
-        ...observationEvents(previous, current, main, pr, at)
+        ...observationEvents(
+          previous,
+          current,
+          main,
+          pr,
+          at,
+          operatorEvents,
+          options.autoGo
+        )
       );
     }
 
-    events.push(
-      ...supplied.filter((event) => !Predicate.isTagged(event, "plan"))
-    );
     const frame: Frame = { at, events, reads };
 
     const next: Recording = {
