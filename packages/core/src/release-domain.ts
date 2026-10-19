@@ -104,6 +104,11 @@ export type ReleaseInput = typeof ReleaseInputSchema.Type;
 const stamp = { at: time };
 
 export const ReleaseEvents = {
+  baselined: Schema.Struct({
+    ...stamp,
+    check: name,
+    outcome: Schema.Literals(["pass", "fail", "unknown"]),
+  }),
   deployed: Schema.Struct(stamp),
   failed: Schema.Struct({
     ...stamp,
@@ -131,6 +136,7 @@ export const ReleaseEvents = {
 };
 
 export const PostedReleaseEventSchema = Schema.Union([
+  Schema.TaggedStruct("baselined", ReleaseEvents.baselined.fields),
   Schema.TaggedStruct("override", ReleaseEvents.override.fields),
   Schema.TaggedStruct("planned", ReleaseEvents.planned.fields),
   Schema.TaggedStruct("reviewed", ReleaseEvents.reviewed.fields),
@@ -159,6 +165,7 @@ export type ReleaseEvent = {
 }[keyof EventPayloads];
 
 export const toReleaseEvent = Data.taggedEnum<PostedReleaseEvent>().$match({
+  baselined: (posted): ReleaseEvent => ({ ...posted, type: "baselined" }),
   deployed: (posted): ReleaseEvent => ({ ...posted, type: "deployed" }),
   failed: (posted): ReleaseEvent => ({ ...posted, type: "failed" }),
   fire: (posted): ReleaseEvent => ({ ...posted, type: "fire" }),
@@ -179,6 +186,11 @@ export const toReleaseEvent = Data.taggedEnum<PostedReleaseEvent>().$match({
 const intentStamp = { at: time, id: name };
 
 export const ReleaseIntentSchema = Schema.Union([
+  Schema.Struct({
+    ...intentStamp,
+    checks: Schema.NonEmptyArray(ReleaseCheckSchema),
+    kind: Schema.Literal("Baseline"),
+  }),
   Schema.Struct({
     ...intentStamp,
     kind: Schema.Literal("PlanRelease"),
@@ -203,7 +215,7 @@ export const ReleaseIntentSchema = Schema.Union([
   Schema.Struct({ ...intentStamp, kind: Schema.Literal("Restore"), to: name }),
   Schema.Struct({
     ...intentStamp,
-    cause: Schema.Literal("observationFailed"),
+    cause: Schema.Literals(["observationFailed", "observationPreexisting"]),
     check: name,
     kind: Schema.Literal("NotifyOwner"),
   }),
@@ -243,6 +255,12 @@ const releaseTransitionFact = Schema.Struct({
 });
 
 export const ReleaseFactSchema = Schema.Union([
+  Schema.Struct({
+    ...releaseTransitionFact.fields,
+    check: name,
+    kind: Schema.Literal("baseline"),
+    outcome: Schema.Literals(["pass", "fail", "unknown"]),
+  }),
   Schema.Struct({
     ...releaseTransitionFact.fields,
     by: name,

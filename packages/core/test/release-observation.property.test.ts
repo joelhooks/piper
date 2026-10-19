@@ -35,10 +35,16 @@ const checksOf = (
 const observing = Effect.fn("Test.Release.observing")(function* observing(
   checks: ReleaseInput["checks"]
 ) {
-  return yield* stepRelease(
-    yield* openRelease({ ...releaseInput, checks }),
-    releaseHappy.slice(0, 4)
-  );
+  return yield* stepRelease(yield* openRelease({ ...releaseInput, checks }), [
+    ...releaseHappy.slice(0, 3),
+    ...checks.map((check): ReleaseEvent => ({
+      at: 103,
+      check: check.name,
+      outcome: "pass",
+      type: "baselined",
+    })),
+    { at: 104, type: "deployed" },
+  ]);
 });
 
 const inspect = Effect.fn("Test.Release.inspect")(function* inspect(
@@ -81,7 +87,11 @@ describe("release observation policy", () => {
               checks: [{ name: check, onFail }],
               observationTimeoutMs: timeout,
             }),
-            [...releaseHappy.slice(0, 3), { at: deployedAt, type: "deployed" }]
+            [
+              ...releaseHappy.slice(0, 3),
+              { at: 103, check, outcome: "pass", type: "baselined" },
+              { at: deployedAt, type: "deployed" },
+            ]
           );
 
           for (const at of [
@@ -199,7 +209,7 @@ describe("release observation policy", () => {
           ).toEqual([
             {
               at: 105,
-              id: "release-synthetic/5",
+              id: "release-synthetic/6",
               kind: "Restore",
               to: releaseInput.previousTarget,
             },

@@ -108,6 +108,10 @@ export const ReleaseReviewer = Context.Reference<{
 
 const events = Data.taggedEnum<PostedReleaseEvent>();
 
+const BaselinedSchema = Schema.Struct({
+  outcome: Schema.Literals(["pass", "fail", "unknown"]),
+});
+
 const ObservedSchema = Schema.Struct({
   outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
 });
@@ -150,6 +154,51 @@ const resolve = Effect.fn("Release.resolve")(function* resolve(
   return { args: [...configured.args, ...args], command: configured.command };
 });
 
+const runBaseline = Effect.fn("Executor.release.baseline")(
+  function* runBaseline(
+    job: Extract<Job, { readonly _tag: "release" }>,
+    intent: Extract<ReleaseIntent, { readonly kind: "Baseline" }>,
+    mode: Mode
+  ) {
+    const baselines: PostedReleaseEvent[] = [];
+    const operations: Write[] = [];
+
+    for (const { name: check } of intent.checks) {
+      const args = ["--check", check, "--baseline"];
+
+      if (mode === "dry-run") {
+        const command = yield* resolve(`Observe:${check}`, args);
+
+        operations.push({
+          body: { args: command.args },
+          method: "POST",
+          path: command.command,
+        });
+      } else {
+        const { outcome } = yield* Effect.gen(function* baseline() {
+          const command = yield* resolve(`Observe:${check}`, args);
+          const runner = yield* ReleaseCommands;
+          const output = yield* runner.run(command);
+
+          return yield* decode(Schema.fromJsonString(BaselinedSchema))(output);
+        }).pipe(
+          Effect.orElseSucceed((): typeof BaselinedSchema.Type => ({
+            outcome: "unknown",
+          }))
+        );
+
+        const baselinedAt = yield* Clock.currentTimeMillis;
+
+        baselines.push(events.baselined({ at: baselinedAt, check, outcome }));
+      }
+    }
+
+    return mode === "dry-run"
+      ? yield* record(job, operations)
+      : completed(baselines);
+  }
+);
+
 const runRelease = Effect.fn("Executor.release.run")(function* runRelease(
   job: Extract<Job, { readonly _tag: "release" }>,
   settings: Settings
@@ -181,9 +230,9 @@ const runRelease = Effect.fn("Executor.release.run")(function* runRelease(
 
   if (intent.kind === "NotifyOwner") {
     const args =
-      intent.cause === "observationFailed"
-        ? ["--cause", intent.cause, "--check", intent.check]
-        : ["--cause", intent.cause];
+      intent.cause === "observationExpired"
+        ? ["--cause", intent.cause]
+        : ["--cause", intent.cause, "--check", intent.check];
 
     const command = yield* resolve("NotifyOwner", args);
 
@@ -197,6 +246,10 @@ const runRelease = Effect.fn("Executor.release.run")(function* runRelease(
     yield* notifier.run(command);
 
     return completed();
+  }
+
+  if (intent.kind === "Baseline") {
+    return yield* runBaseline(job, intent, settings.mode);
   }
 
   const keys =
@@ -308,6 +361,12 @@ const failureEvents = (
 
     case "RequestReview": {
       return [events.reviewUnavailable({ at })];
+    }
+
+    case "Baseline": {
+      return intent.checks.map(({ name: check }) =>
+        events.baselined({ at, check, outcome: "unknown" })
+      );
     }
 
     case "Observe": {

@@ -189,12 +189,14 @@ describe("release invariants over synthetic plans and traces", () => {
   );
 
   it.effect.prop(
-    "a failed observation always starts one restore",
+    "a failed observation with a passing baseline starts one restore",
     { check: Arbitrary.schema(Schema.Literals(["availability", "integrity"])) },
     ({ check }) =>
       Effect.gen(function* failedObservation() {
         const persisted = yield* stepRelease(yield* openRelease(releaseInput), [
-          ...releaseHappy.slice(0, 4),
+          ...releaseHappy.slice(0, 3),
+          { at: 103, check, outcome: "pass", type: "baselined" },
+          { at: 104, type: "deployed" },
           { at: 105, check, outcome: "fail", type: "observed" },
         ]);
 
@@ -205,7 +207,7 @@ describe("release invariants over synthetic plans and traces", () => {
         ).toEqual([
           {
             at: 105,
-            id: "release-synthetic/5",
+            id: "release-synthetic/6",
             kind: "Restore",
             to: "commit-before",
           },

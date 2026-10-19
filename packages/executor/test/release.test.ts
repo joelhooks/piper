@@ -1,5 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
-import type { ReleaseIntent } from "@joelhooks/piper/release-domain";
+import type {
+  PostedReleaseEvent,
+  ReleaseIntent,
+} from "@joelhooks/piper/release-domain";
 import {
   Clock,
   ConfigProvider,
@@ -40,6 +43,8 @@ const job = (
 
 const stamp = { at: 1, id: "release-synthetic/1" };
 
+const releaseEvents = Data.taggedEnum<PostedReleaseEvent>();
+
 const commands = {
   Deploy: { args: ["apply"], command: "deploy-command" },
   "Observe:availability": { args: [], command: "check-command" },
@@ -56,6 +61,14 @@ const intents: readonly ReleaseIntent[] = [
     kind: "RequestReview",
     plan: [{ action: "update", id: "literal; rm -rf", kind: "resource" }],
     runId: "release-synthetic",
+  },
+  {
+    ...stamp,
+    checks: [
+      { name: "availability", onFail: "restore" },
+      { name: "integrity", onFail: "escalate" },
+    ],
+    kind: "Baseline",
   },
   { ...stamp, kind: "Deploy", target: "commit-next" },
   {
@@ -112,6 +125,112 @@ const completion = {
 
 describe("release executor command and judgment ports", () => {
   it.effect(
+    "baselines reuse observe mappings, append literal baseline arguments and post every result",
+    () =>
+      Effect.gen(function* baselines() {
+        for (const [output, outcome] of [
+          ['{"outcome":"pass"}', "pass"],
+          ['{"outcome":"fail"}', "fail"],
+          ['{"outcome":"unknown"}', "unknown"],
+          ['{"outcome":"breach"}', "unknown"],
+          ["invalid", "unknown"],
+        ] satisfies readonly [string, "pass" | "fail" | "unknown"][]) {
+          const state = fake([]);
+          const calls: unknown[] = [];
+
+          const result = yield* execute(
+            job({
+              ...stamp,
+              checks: [
+                { name: "availability", onFail: "restore" },
+                { name: "integrity", onFail: "escalate" },
+              ],
+              kind: "Baseline",
+            }),
+            live
+          ).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                state.layer,
+                admitted,
+                Layer.succeed(ReleaseCommandConfig, {
+                  ...commands,
+                  "Observe:availability": {
+                    args: ["configured"],
+                    command: "mapped-baseline",
+                  },
+                }),
+                Layer.succeed(ReleaseCommands, {
+                  run: (command) =>
+                    Effect.sync(() => {
+                      calls.push(command);
+
+                      return output;
+                    }),
+                })
+              )
+            )
+          );
+
+          expect(result.status).toBe("done");
+          expect(calls).toEqual([
+            {
+              args: ["configured", "--check", "availability", "--baseline"],
+              command: "mapped-baseline",
+            },
+            {
+              args: ["--check", "integrity", "--baseline"],
+              command: "check-command",
+            },
+          ]);
+          expect(result.events).toEqual([
+            releaseEvents.baselined({ at: 0, check: "availability", outcome }),
+            releaseEvents.baselined({ at: 0, check: "integrity", outcome }),
+          ]);
+        }
+      })
+  );
+
+  it.effect(
+    "baseline command failures and absent mappings become unknown without erasing later checks",
+    () =>
+      Effect.gen(function* baselineFailures() {
+        const state = fake([]);
+        const calls: ChildProcess.Command[] = [];
+
+        const result = yield* execute(
+          job({
+            ...stamp,
+            checks: [
+              { name: "missing", onFail: "restore" },
+              { name: "availability", onFail: "restore" },
+              { name: "integrity", onFail: "escalate" },
+            ],
+            kind: "Baseline",
+          }),
+          live
+        ).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              state.layer,
+              admitted,
+              Layer.succeed(ReleaseCommandConfig, commands),
+              releaseCommandsLayer.pipe(Layer.provide(spawner(calls, "", 1)))
+            )
+          )
+        );
+
+        expect(result.status).toBe("done");
+        expect(calls).toHaveLength(2);
+        expect(result.events).toEqual(
+          ["missing", "availability", "integrity"].map((check) =>
+            releaseEvents.baselined({ at: 0, check, outcome: "unknown" })
+          )
+        );
+      })
+  );
+
+  it.effect(
     "owner notifications use literal arguments, honor dry-run, and emit no machine events",
     () =>
       Effect.gen(function* notifications() {
@@ -122,6 +241,12 @@ describe("release executor command and judgment ports", () => {
             check: "availability",
             kind: "NotifyOwner",
           },
+          {
+            ...stamp,
+            cause: "observationPreexisting",
+            check: "integrity",
+            kind: "NotifyOwner",
+          },
           { ...stamp, cause: "observationExpired", kind: "NotifyOwner" },
         ] satisfies readonly ReleaseIntent[]) {
           for (const settings of [dry, live]) {
@@ -129,9 +254,9 @@ describe("release executor command and judgment ports", () => {
             const calls: unknown[] = [];
 
             const args =
-              intent.cause === "observationFailed"
-                ? ["--cause", intent.cause, "--check", intent.check]
-                : ["--cause", intent.cause];
+              intent.cause === "observationExpired"
+                ? ["--cause", intent.cause]
+                : ["--cause", intent.cause, "--check", intent.check];
 
             const result = yield* execute(job(intent), settings).pipe(
               Effect.provide(
@@ -234,12 +359,20 @@ describe("release executor command and judgment ports", () => {
         ).toEqual([
           "plan-command",
           "RequestReview",
+          "check-command",
+          "check-command",
           "deploy-command",
           "check-command",
           "check-command",
           "restore-command",
         ]);
-        expect(state.records[2]?.wouldDo[0]?.body).toEqual({
+        expect(
+          state.records[2]?.wouldDo.map((operation) => operation.body)
+        ).toEqual([
+          { args: ["--check", "availability", "--baseline"] },
+          { args: ["--check", "integrity", "--baseline"] },
+        ]);
+        expect(state.records[3]?.wouldDo[0]?.body).toEqual({
           args: ["apply", "--target", "commit-next"],
         });
       })
@@ -274,6 +407,7 @@ describe("release executor command and judgment ports", () => {
         for (const intent of intents.filter(
           (candidate) =>
             candidate.kind !== "RequestReview" &&
+            candidate.kind !== "Baseline" &&
             candidate.kind !== "Observe" &&
             candidate.kind !== "NotifyOwner"
         )) {

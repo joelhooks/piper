@@ -15,6 +15,7 @@ import type {
 import { checkReleaseExpectation, releaseRunway } from "./release-policy.js";
 
 export interface ReleaseContext extends ReleaseInput {
+  readonly baselines: Readonly<Record<string, "pass" | "fail" | "unknown">>;
   readonly rows: readonly ReleaseRow[];
   readonly offending: readonly ReleaseViolation[];
   readonly observations: Readonly<Record<string, "pass" | "fail" | "unknown">>;
@@ -109,6 +110,14 @@ const observe = (
   }
 
   if (event.outcome === "fail") {
+    if (context.baselines?.[event.check] !== "pass") {
+      return escalate(context, event.at, {
+        cause: "observationPreexisting",
+        check: event.check,
+        kind: "NotifyOwner",
+      });
+    }
+
     return context.checks.some(
       (check) => check.name === event.check && check.onFail === "restore"
     )
@@ -146,6 +155,7 @@ const initialContext = (input: ReleaseInput): ReleaseContext =>
   emit(
     {
       ...input,
+      baselines: {},
       deadlineAt: undefined,
       facts: [{ at: input.at, cause: "opened", state: "planned" }],
       intents: [],
@@ -186,10 +196,14 @@ export const releaseMachine = setupEffect({
         fire: ({ context, event }) =>
           event.at >= context.lastAt && releaseRunway(context, event.at)
             ? move(
-                emit(context, event.at, {
-                  kind: "Deploy",
-                  target: context.target,
-                }),
+                emit(
+                  emit(context, event.at, {
+                    checks: context.checks,
+                    kind: "Baseline",
+                  }),
+                  event.at,
+                  { kind: "Deploy", target: context.target }
+                ),
                 "fired",
                 event.at,
                 "fire",
@@ -241,6 +255,31 @@ export const releaseMachine = setupEffect({
     },
     fired: {
       on: {
+        baselined: ({ context, event }) =>
+          event.at >= context.lastAt &&
+          context.checks.some((check) => check.name === event.check)
+            ? {
+                context: {
+                  ...context,
+                  baselines: {
+                    ...context.baselines,
+                    [event.check]: event.outcome,
+                  },
+                  facts: [
+                    ...context.facts,
+                    {
+                      at: event.at,
+                      cause: "baselined",
+                      check: event.check,
+                      kind: "baseline",
+                      outcome: event.outcome,
+                      state: "fired",
+                    } satisfies ReleaseFact,
+                  ],
+                  lastAt: event.at,
+                },
+              }
+            : undefined,
         deployed: ({ context, event }) =>
           event.at >= context.lastAt
             ? move(
