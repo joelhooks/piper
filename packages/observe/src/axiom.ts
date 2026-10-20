@@ -21,7 +21,7 @@ const AplResultSchema = Schema.Struct({
 });
 
 export interface AxiomAccess {
-  readonly orgId: Redacted.Redacted;
+  readonly orgId: Option.Option<Redacted.Redacted>;
   readonly token: Redacted.Redacted;
 }
 
@@ -62,10 +62,16 @@ export const countRequests = Effect.fn("Observe.countRequests")(
     ).pipe(
       HttpClientRequest.setUrlParam("format", "tabular"),
       HttpClientRequest.bearerToken(access.token),
-      HttpClientRequest.setHeader(
-        "x-axiom-org-id",
-        Redacted.value(access.orgId)
-      ),
+      (unscoped) =>
+        Option.match(access.orgId, {
+          onNone: () => unscoped,
+          onSome: (orgId) =>
+            HttpClientRequest.setHeader(
+              unscoped,
+              "x-axiom-org-id",
+              Redacted.value(orgId)
+            ),
+        }),
       HttpClientRequest.acceptJson,
       HttpClientRequest.bodyJson({
         apl: errorsQuery(axiom),

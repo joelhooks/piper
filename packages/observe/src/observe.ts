@@ -11,7 +11,7 @@ import type {
   ObserveConfig,
   Phase,
 } from "./domain.js";
-import { requireToken } from "./http.js";
+import { optionalToken, requireToken } from "./http.js";
 import {
   canaryMismatch,
   deploymentVerdict,
@@ -110,7 +110,7 @@ const readback = Effect.fn("Observe.readback")(function* readback(
 
 const axiomAccess = Effect.gen(function* axiomAccess() {
   const token = yield* requireToken("AXIOM_TOKEN");
-  const orgId = yield* requireToken("AXIOM_ORG_ID");
+  const orgId = yield* optionalToken("AXIOM_ORG_ID");
 
   return { orgId, token };
 });

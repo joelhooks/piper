@@ -549,7 +549,7 @@ describe("errors", () => {
     })
   );
 
-  it.effect.each<TokenName>(["AXIOM_TOKEN", "AXIOM_ORG_ID", "VERCEL_TOKEN"])(
+  it.effect.each<TokenName>(["AXIOM_TOKEN", "VERCEL_TOKEN"])(
     "is unknown with a reason when %s is missing",
     (name) =>
       Effect.gen(function* test() {
@@ -569,6 +569,35 @@ describe("errors", () => {
           reason: `missing ${name}`,
         });
       })
+  );
+
+  it.effect("queries without the org header when AXIOM_ORG_ID is unset", () =>
+    Effect.gen(function* test() {
+      yield* afterWindow;
+
+      const { AXIOM_ORG_ID: _org, ...values } = tokens;
+
+      const { observation, sent } = yield* run(
+        {
+          ...releasedScene,
+          after: json(counts(4000, 6)),
+          before: json(counts(4000, 4)),
+        },
+        "errors",
+        "release",
+        values
+      );
+
+      const queries = sent.filter(
+        (request) => request.url.pathname === "/v1/datasets/_apl"
+      );
+
+      expect(observation.outcome).toBe("pass");
+      expect(queries).toHaveLength(2);
+      expect(queries.some((query) => "x-axiom-org-id" in query.headers)).toBe(
+        false
+      );
+    })
   );
 
   it.effect("is unknown when Axiom refuses the query", () =>

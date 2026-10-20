@@ -7,15 +7,21 @@ import { ObserveError } from "./domain.js";
 
 export type TokenName = "AXIOM_ORG_ID" | "AXIOM_TOKEN" | "VERCEL_TOKEN";
 
-export const requireToken = Effect.fn("Observe.requireToken")(
-  function* requireToken(name: TokenName) {
+export const optionalToken = Effect.fn("Observe.optionalToken")(
+  function* optionalToken(name: TokenName) {
     const value = yield* Config.option(Config.Redacted(name)).pipe(
       Effect.mapError(() => new ObserveError({ reason: `unreadable ${name}` }))
     );
 
-    const present = value.pipe(
+    return value.pipe(
       Option.filter((token) => Redacted.value(token).trim() !== "")
     );
+  }
+);
+
+export const requireToken = Effect.fn("Observe.requireToken")(
+  function* requireToken(name: TokenName) {
+    const present = yield* optionalToken(name);
 
     if (Option.isNone(present)) {
       return yield* new ObserveError({ reason: `missing ${name}` });

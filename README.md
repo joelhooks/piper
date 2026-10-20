@@ -265,7 +265,7 @@ The host appends `--check <name>`, and `--baseline` for the pre-deploy sample. T
 }
 ```
 
-Tokens come only from `VERCEL_TOKEN`, `AXIOM_TOKEN`, and `AXIOM_ORG_ID`, and are never printed. A missing token, provider error, or unexpected response prints `unknown` with a `reason`. Every check prints one JSON line and exits 0.
+Tokens come only from `VERCEL_TOKEN`, `AXIOM_TOKEN`, and the optional `AXIOM_ORG_ID`, and are never printed. `AXIOM_ORG_ID` is required for personal access tokens; when set, it is sent as the `x-axiom-org-id` header. API tokens need no org header. A missing token, provider error, or unexpected response prints `unknown` with a `reason`. Every check prints one JSON line and exits 0.
 
 | Check | pass | fail / breach | unknown | `--baseline` |
 | --- | --- | --- | --- | --- |
