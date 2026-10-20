@@ -1,0 +1,17 @@
+{
+  "name": "@joelhooks/piper-observe",
+  "version": "0.2.0",
+  "private": true,
+  "bin": {
+    "piper-observe": "./bin/piper-observe"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.5",
+    "effect": "4.0.5",
+    "tsx": "4.23.15"
+  }
+}

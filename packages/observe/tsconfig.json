@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "allowedUnstableApis": [
+          "@effect/platform-node/NodeRuntime",
+          "@effect/platform-node/NodeServices",
+          "@effect/platform-node/NodeHttpClient",
+          "effect/FileSystem",
+          "effect/http/HttpClient",
+          "effect/http/HttpClientRequest",
+          "effect/http/HttpClientResponse",
+          "effect/cli/Command",
+          "effect/cli/Flag"
+        ]
+      }
+    ]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": []
+}

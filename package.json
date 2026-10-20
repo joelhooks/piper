@@ -12,12 +12,13 @@
   "scripts": {
     "prepare": "effect-tsgo patch && if git rev-parse --git-dir >/dev/null 2>&1; then lefthook install; fi && mkdir -p .pi/extensions && ln -sfn ../../tools/pi/git-interceptor .pi/extensions/git-interceptor",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/core/test/tsconfig.json && tsc --noEmit -p packages/worker/tsconfig.json && tsc --noEmit -p packages/worker/test/tsconfig.json && tsc --noEmit -p packages/executor/tsconfig.json && tsc --noEmit -p packages/executor/test/tsconfig.json && tsc --noEmit -p packages/shadow/tsconfig.json && tsc --noEmit -p packages/shadow/test/tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/core/test/tsconfig.json && tsc --noEmit -p packages/worker/tsconfig.json && tsc --noEmit -p packages/worker/test/tsconfig.json && tsc --noEmit -p packages/executor/tsconfig.json && tsc --noEmit -p packages/executor/test/tsconfig.json && tsc --noEmit -p packages/shadow/tsconfig.json && tsc --noEmit -p packages/shadow/test/tsconfig.json && tsc --noEmit -p packages/observe/tsconfig.json && tsc --noEmit -p packages/observe/test/tsconfig.json",
     "lint": "ultracite check && node scripts/lint-exemption-ratchet.mjs && oxfmt --check .",
     "fix": "ultracite fix && oxfmt .",
     "test": "vitest run",
     "shadow": "pnpm --filter @joelhooks/piper-shadow exec ./bin/piper-shadow",
     "executor": "pnpm --filter @joelhooks/piper-executor exec ./bin/piper-executor",
+    "observe": "pnpm --filter @joelhooks/piper-observe exec ./bin/piper-observe",
     "worker:plan": "pnpm --filter @joelhooks/piper-worker plan"
   },
   "devDependencies": {

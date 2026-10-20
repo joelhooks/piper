@@ -225,6 +225,56 @@ Worker-outbox release-job dry-run executes no commands, constructs no live comma
 
 Release jobs use `_tag: "release"` and the same journal claim identity and delivery protocol as other machines. A host supplies these jobs through `Outbox` and translates tagged posted events with `toReleaseEvent`. This change adds no Release routes to the existing Worker. The dedicated release host owns its READY store, run log, observation clock and operator admission records. Applications must authenticate operator inputs before invoking it. Worker routing and asynchronous review callbacks remain separate adapters.
 
+### Observe checks for a Vercel project with Axiom logs
+
+`packages/observe` ships `piper-observe`, a generic check command for an app that deploys to a Vercel project and logs requests to an Axiom dataset. Map each check through the command table:
+
+```json
+{
+  "Observe:readback": {
+    "command": "piper-observe",
+    "args": ["--config", "observe.json"]
+  },
+  "Observe:errors": {
+    "command": "piper-observe",
+    "args": ["--config", "observe.json"]
+  },
+  "Observe:canary": {
+    "command": "piper-observe",
+    "args": ["--config", "observe.json"]
+  }
+}
+```
+
+The host appends `--check <name>`, and `--baseline` for the pre-deploy sample. The config file is decoded strictly; a missing or unknown field exits nonzero and names the field:
+
+```json
+{
+  "sha": "<full git sha being released>",
+  "vercel": { "projectId": "prj_…", "teamId": "team_…" },
+  "axiom": {
+    "dataset": "…",
+    "filter": "project == 'x' and env == 'production'",
+    "statusField": "request.statusCode",
+    "windowMinutes": 15,
+    "minRequests": 1000,
+    "maxRateRatio": 2,
+    "hardFloorErrors": 0
+  },
+  "canary": [{ "url": "https://…", "status": 200, "contains": "…" }]
+}
+```
+
+Tokens come only from `VERCEL_TOKEN`, `AXIOM_TOKEN`, and `AXIOM_ORG_ID`, and are never printed. A missing token, provider error, or unexpected response prints `unknown` with a `reason`. Every check prints one JSON line and exits 0.
+
+| Check | pass | fail / breach | unknown | `--baseline` |
+| --- | --- | --- | --- | --- |
+| `readback` | The newest production deployment of `sha` is READY and is the project's current production deployment | `fail` when it is ERROR or CANCELED | Not found, building, queued, or not yet serving | pass when current production is READY |
+| `errors` | Otherwise | `breach` when after-window errors exceed `hardFloorErrors` and the after rate exceeds `max(beforeRate × maxRateRatio, 1 / minRequests)` | After window still open, or fewer than `minRequests` after requests | pass when the before-window query succeeds |
+| `canary` | Every URL returns `status` and its body contains `contains` | `fail` naming each mismatched URL | A network error | the same checks |
+
+The errors windows are `windowMinutes` long on either side of the release's `readyAt`, which is read back from Vercel on every run. Only statuses of 500 and above count as errors. Canary requests are cookie-free GETs.
+
 ### Claims, outcomes, and recovery
 
 The append-only `journal.jsonl` is the authority for executor progress. It is separate from the machines' authoritative outboxes and ledgers. Every record is schema-validated and fsynced. A stable identity combines repo, machine kind, target, and intent ID. `claimed` is persisted **before** execution; `settled` stores exactly one execution outcome: `done`, `failed` with a typed error, or `recorded-would-do`. The set of durable claims is the cursor. New reads may include old outbox rows, but those rows never execute again.
