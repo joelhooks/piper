@@ -1,32 +1,16 @@
 import type { CheckRun, Intent } from "@joelhooks/piper/domain";
 import { isFailed, isInfra, latestRuns } from "@joelhooks/piper/policy";
 import type { TrainContext } from "@joelhooks/piper/train";
-import { Data, Predicate, SchemaIssue } from "effect";
+import { Data } from "effect";
 import type { Schema } from "effect";
 
+import { schemaIssuePaths } from "./schema-paths.js";
 import type { TrainAdmission, TrainStop } from "./train-domain.js";
 
 export const stops = Data.taggedEnum<TrainStop>();
 
-const issueFormatter = SchemaIssue.makeFormatterStandardSchemaV1();
-
-const failingPaths = (cause: Schema.SchemaError) =>
-  [
-    ...new Set(
-      issueFormatter(cause.issue).issues.map((issue) =>
-        (issue.path ?? [])
-          .map((segment) =>
-            String(
-              Predicate.hasProperty(segment, "key") ? segment.key : segment
-            )
-          )
-          .join(".")
-      )
-    ),
-  ].toSorted();
-
 export const admissionRefusal = (cause: Schema.SchemaError): TrainStop => {
-  const paths = failingPaths(cause);
+  const paths = schemaIssuePaths(cause);
 
   const unnamedBase = paths.includes("baseBranch");
 

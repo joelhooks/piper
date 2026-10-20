@@ -6,7 +6,7 @@ import {
   NodeServices,
 } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { createEffectActor, snapshots } from "@xstate/effect";
+import { createEffectActor, snapshots, waitFor } from "@xstate/effect";
 import {
   ConfigProvider,
   Deferred,
@@ -26,9 +26,17 @@ import { releaseInput } from "../../core/test/release-fixtures.js";
 import { ExecutorError } from "../src/domain.js";
 import { Recorder } from "../src/recorder.js";
 import { releaseCheckMachine } from "../src/release-check.js";
-import { RunLogLineSchema } from "../src/release-run-domain.js";
+import {
+  AdmissionSchema,
+  ReleaseConfigSchema,
+  RunLogLineSchema,
+} from "../src/release-run-domain.js";
 import type { ReleaseConfig, VerdictRow } from "../src/release-run-domain.js";
 import { runLines } from "../src/release-run-log.js";
+import {
+  releaseAdmissionRefusal,
+  releaseConfigRefusal,
+} from "../src/release-run-policy.js";
 import {
   MessageSink,
   ReadyStore,
@@ -41,7 +49,11 @@ import {
   liveFireSinks,
   makeVerdictMemory,
 } from "../src/release-run-services.js";
-import { releaseDriverMachine, runRelease } from "../src/release-run.js";
+import {
+  decodeReleaseConfig,
+  releaseDriverMachine,
+  runRelease,
+} from "../src/release-run.js";
 import type { ReleaseRunOptions } from "../src/release-run.js";
 import { ReleaseCommands, ReleaseCommandConfig } from "../src/release.js";
 import type { ReleaseCommandSchema } from "../src/release.js";
@@ -468,7 +480,7 @@ describe("release host", () => {
           mode: "dry-run",
         });
 
-        expect(result.state).toBe("planned");
+        expect(result.state).toBe("rehearsed");
         yield* MessageSink.use((sink) => sink.page("rehearsal page")).pipe(
           Effect.provide(printOnlyReleaseLayer)
         );
@@ -669,6 +681,251 @@ describe("release host", () => {
   );
 
   it.effect(
+    "config and admission refusals name every path without exposing wrong values",
+    () =>
+      Effect.gen(function* refusalPaths() {
+        const test = yield* harness;
+        const secret = "sk_test_SYNTHETIC_VALUE_MUST_NOT_APPEAR";
+
+        const invalidConfig: ReleaseConfig = {
+          ...config,
+          input: {
+            ...config.input,
+            checks: [
+              { ...config.input.checks[0] },
+              ...config.input.checks.slice(1).map((check) => ({ ...check })),
+            ],
+          },
+          preflight: { ...config.preflight },
+        };
+
+        Object.defineProperty(invalidConfig.input.checks[0], "everyMs", {
+          value: secret,
+        });
+        Object.defineProperty(invalidConfig.preflight, "args", {
+          value: secret,
+        });
+        const admission = { ...options.admission };
+        Object.defineProperty(admission, "verdict", { value: secret });
+        Object.defineProperty(admission, "override", { value: secret });
+        yield* Effect.gen(function* decodeBoundaries() {
+          const configCause = yield* Schema.decodeEffect(ReleaseConfigSchema, {
+            errors: "all",
+            reportInput: true,
+          })(invalidConfig).pipe(Effect.flip);
+
+          const admissionCause = yield* Schema.decodeEffect(AdmissionSchema, {
+            errors: "all",
+            reportInput: true,
+          })(admission).pipe(Effect.flip);
+
+          expect(
+            JSON.stringify(releaseAdmissionRefusal(admissionCause))
+          ).not.toContain(secret);
+
+          for (const refusal of [
+            releaseConfigRefusal(configCause),
+            yield* decodeReleaseConfig(JSON.stringify(invalidConfig)).pipe(
+              Effect.flip
+            ),
+            yield* runRelease(invalidConfig, options).pipe(Effect.flip),
+          ]) {
+            expect(JSON.stringify(refusal)).not.toContain(secret);
+            expect(refusal._tag).toBe("Configuration");
+
+            for (const path of ["input.checks.0.everyMs", "preflight.args"]) {
+              expect(refusal.harm).toContain(path);
+              expect(refusal.next).toContain(path);
+            }
+          }
+
+          const refusal = yield* runRelease(config, {
+            ...options,
+            admission,
+          }).pipe(Effect.flip);
+
+          expect(JSON.stringify(refusal)).not.toContain(secret);
+          expect(refusal._tag).toBe("Admission");
+
+          for (const path of ["override", "verdict"]) {
+            expect(refusal.harm).toContain(path);
+            expect(refusal.next).toContain(path);
+          }
+
+          const malformed = yield* decodeReleaseConfig(
+            `not JSON ${secret}`
+          ).pipe(Effect.flip);
+
+          expect(JSON.stringify(malformed)).not.toContain(secret);
+          expect(malformed.harm).toContain("configuration root");
+          expect(test.calls).toEqual([]);
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect(
+    "the reachable release graph exposes all final outcomes without lifecycle fields in context",
+    () =>
+      Effect.gen(function* finalGraph() {
+        const reviewConfig: ReleaseConfig = {
+          ...config,
+          input: { ...config.input, overrideBy: "operator" },
+        };
+
+        const heldOptions: ReleaseRunOptions = {
+          ...options,
+          admission: { ...options.admission, verdict: "hold" },
+        };
+
+        const scenarios: readonly {
+          readonly config: ReleaseConfig;
+          readonly final: string;
+          readonly options: ReleaseRunOptions;
+          readonly outcome: "pass" | "fail" | "unknown";
+        }[] = [
+          {
+            config,
+            final: "ready",
+            options: { ...options, action: "ready" },
+            outcome: "pass",
+          },
+          {
+            config,
+            final: "rehearsed",
+            options: { ...options, mode: "dry-run" },
+            outcome: "pass",
+          },
+          { config, final: "accepted", options, outcome: "pass" },
+          { config, final: "restored", options, outcome: "fail" },
+          { config, final: "escalated", options, outcome: "unknown" },
+          { config, final: "held", options: heldOptions, outcome: "pass" },
+          {
+            config: reviewConfig,
+            final: "reviewHeld",
+            options: heldOptions,
+            outcome: "pass",
+          },
+          {
+            config: reviewConfig,
+            final: "accepted",
+            options: {
+              ...heldOptions,
+              admission: { ...heldOptions.admission, override: true },
+            },
+            outcome: "pass",
+          },
+          {
+            config: {
+              ...config,
+              input: { ...config.input, blackoutUntil: 100_000 },
+            },
+            final: "armed",
+            options,
+            outcome: "pass",
+          },
+          {
+            config,
+            final: "refused",
+            options: { ...options, admittedRepo: "other/repo" },
+            outcome: "pass",
+          },
+        ];
+
+        const finals: string[] = [];
+        const states: string[] = [];
+
+        for (const scenario of scenarios) {
+          const test = yield* harness;
+          test.controls.outcome = scenario.outcome;
+          yield* Effect.gen(function* trace() {
+            yield* ready(scenario.config);
+
+            const actor = yield* createEffectActor(releaseDriverMachine, {
+              input: { config: scenario.config, options: scenario.options },
+            });
+
+            expect(Object.keys(actor.getSnapshot().context).toSorted()).toEqual(
+              ["config", "error", "executed", "options", "persisted", "ready"]
+            );
+            states.push(actor.getSnapshot().value);
+
+            const subscription = actor.subscribe((snapshot) => {
+              states.push(snapshot.value);
+            });
+
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                subscription.unsubscribe();
+              })
+            );
+            yield* waitFor(
+              actor,
+              (snapshot) =>
+                snapshot.matches("observing") || snapshot.status === "done"
+            ).pipe(Effect.orDie);
+            yield* TestClock.adjust(100);
+
+            const final = yield* waitFor(
+              actor,
+              (snapshot) => snapshot.status === "done"
+            ).pipe(Effect.orDie);
+
+            expect(final.status).toBe("done");
+            expect(final.value).toBe(scenario.final);
+            expect(test.pages).toHaveLength(
+              scenario.final === "held" || scenario.final === "escalated"
+                ? 1
+                : 0
+            );
+            finals.push(final.value);
+          }).pipe(
+            Effect.provideService(
+              ReleaseCommandConfig,
+              scenario.config.commands
+            ),
+            Effect.provide(test.layer)
+          );
+        }
+
+        expect([...new Set(finals)].toSorted()).toEqual([
+          "accepted",
+          "armed",
+          "escalated",
+          "held",
+          "ready",
+          "refused",
+          "rehearsed",
+          "restored",
+          "reviewHeld",
+        ]);
+        expect([...new Set(states)].toSorted()).toEqual([
+          "accepted",
+          "admitting",
+          "armed",
+          "baselining",
+          "completing",
+          "deploying",
+          "escalated",
+          "firing",
+          "held",
+          "notifying",
+          "observing",
+          "overriding",
+          "paging",
+          "planning",
+          "preparing",
+          "ready",
+          "refused",
+          "rehearsed",
+          "restored",
+          "restoring",
+          "reviewHeld",
+          "reviewing",
+        ]);
+      })
+  );
+
+  it.effect(
     "reaches the declared driver states through real actor execution",
     () =>
       Effect.gen(function* reachable() {
@@ -711,10 +968,14 @@ describe("release host", () => {
             reached.filter((value, index) => reached.indexOf(value) === index)
           ).toEqual([
             "admitting",
-            "driving",
+            "planning",
+            "reviewing",
+            "firing",
+            "baselining",
+            "deploying",
             "observing",
-            "finishing",
-            "finished",
+            "completing",
+            "accepted",
           ]);
           expect(Object.keys(releaseCheckMachine.states).toSorted()).toEqual([
             "expired",

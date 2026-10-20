@@ -54,7 +54,7 @@ Observation detail survives in the logged observed event and verdict evidence. D
 
 ## Refusals and records
 
-`ReleaseRefusalSchema` defines tagged refusals. Every variant requires `harm` and `next`: configuration, predecessor, plan, preflight, READY, admission, deploy attempted, storage and execution.
+`ReleaseRefusalSchema` defines tagged refusals. Every variant requires `harm` and `next`: configuration, predecessor, plan, preflight, READY, admission, deploy attempted, storage and execution. Config and operator-admission decoders collect all schema issues and name their sorted, deduplicated paths in both advice fields. They never include rejected values. Train and release share the path-only issue extractor; malformed JSON names the configuration root.
 
 READY contains `{ sha, planHash, rows }`. The hash is SHA-256 of the schema-decoded plan rows. Fire requires the same commit and plan, then verifies the executed plan again before review or deployment.
 
@@ -82,7 +82,9 @@ State changes send `release <name> <sha8>: <state>`. Completion sends `finished:
 
 ## Observation lifecycle
 
-The driver has `admitting`, `driving`, `observing`, `finishing` and `finished` states. Executed intent ids live in its context.
+The driver's graph owns admission, preparation, planning, review, override, fire, baseline, deploy, observation, restoration, notification, completion and paging. Each invoked task performs one stage's effects. Guarded `onDone` transitions inspect typed outcomes and core snapshots; tasks never choose a destination. Context stores executed intent ids and the persisted domain snapshot, not a route or a second current-state string.
+
+Its reachable final states are `accepted`, `armed`, `escalated`, `held`, `ready`, `refused`, `rehearsed`, `restored` and `reviewHeld`. `runRelease` reads its result state from the driver's final snapshot. Preparation therefore returns `ready`, and dry fire returns `rehearsed`. Refusals fail the Effect rather than returning a successful result. Completion messages and log records still name the core state, including `planned` for a dry fire.
 
 Under observing, a parallel machine creates one region per unsettled check. Each region owns a check machine with `waiting`, `sampling`, `settled` and `expired` states. Its cadence and deadline do not delay other regions. Settled checks are not sampled again. Per-check expiration cancels that check's command; the overall deadline steps `tick` into core, which escalates and pages if health remains unknown.
 
@@ -96,9 +98,12 @@ Tabs and line breaks inside cells become spaces. `makeVerdictMemory` provides an
 
 ## Verification receipt
 
-`test/release-run.test.ts` covers refusal advice, acceptance, held review, explicit override words, restoration after fail/breach, independent cadence and deadlines, unknown expiry, notification failure, eventless intent failure, deploy-attempt refusal, plan drift, durable rows and dry-run isolation. It observes actual driver snapshots for the reachable-state test.
+`test/release-run.test.ts` covers refusal advice, acceptance, held review, explicit override words, restoration after fail/breach, independent cadence and deadlines, unknown expiry, notification failure, eventless intent failure, deploy-attempt refusal, plan drift, durable rows and dry-run isolation. It observes actual driver snapshots across all nine final outcomes and asserts that context has no lifecycle routing fields. Path-diagnostic tests cover JSON config, typed config and operator admission, including a secret-looking synthetic wrong value and schema issues that retain their input.
 
 Mutation checks were run before trusting the suite:
+
+- Redirecting the accepted graph edge to armed failed the final-outcome trace. Reintroducing a context state string independently failed its context-shape assertion. Both faults were restored.
+- Appending the raw schema message when issues retained input exposed the synthetic secret and failed the refusal test. Truncating the path list independently dropped `preflight.args` and failed the all-path assertion. Both faults were restored.
 
 - A batch of narrow planted faults made all 18 initial host tests fail. Faults removed settled verdict delivery, pages, per-check limits, the deploy-attempt guard, override words, refusal advice, the changed-plan guard and memory deduplication. It also inverted eventless-failure handling, removed the dry-run service override, renamed the final driver state and admitted live sinks during rehearsal. All faults were restored.
 - Inverting the settled-only row guard made the unknown-expiry test write unknown verdicts and fail. The guard was restored.

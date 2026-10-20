@@ -3,7 +3,10 @@ import {
   ReleasePlanSchema,
   toReleaseEvent,
 } from "@joelhooks/piper/release-domain";
-import type { PostedReleaseEvent } from "@joelhooks/piper/release-domain";
+import type {
+  PostedReleaseEvent,
+  ReleaseIntent,
+} from "@joelhooks/piper/release-domain";
 import {
   openRelease,
   readRelease,
@@ -44,7 +47,12 @@ import type {
   ReleaseRefusal,
 } from "./release-run-domain.js";
 import { runLines } from "./release-run-log.js";
-import { attemptedDeploy, codeOnlyPlan } from "./release-run-policy.js";
+import {
+  attemptedDeploy,
+  codeOnlyPlan,
+  releaseAdmissionRefusal,
+  releaseConfigRefusal,
+} from "./release-run-policy.js";
 import {
   MessageSink,
   printOnlyReleaseLayer,
@@ -58,6 +66,7 @@ import {
   ReleaseCommandConfig,
   ReleaseCommands,
 } from "./release.js";
+import type { ReleaseOutcome } from "./release.js";
 
 const refusals = Data.taggedEnum<ReleaseRefusal>();
 
@@ -82,8 +91,12 @@ interface DriverContext extends DriverInput {
   readonly executed: readonly string[];
   readonly persisted: PersistedRelease | null;
   readonly ready: Ready | null;
-  readonly route: "driving" | "observing" | "finishing";
-  readonly state: string;
+}
+
+interface StageOutput {
+  readonly context: DriverContext;
+  readonly outcome: ReleaseOutcome | null;
+  readonly snapshot: Effect.Success<ReturnType<typeof readRelease>>;
 }
 
 export const releasePlanHash = Effect.fn("ReleaseRun.planHash")(
@@ -207,18 +220,21 @@ const announce = Effect.fn("ReleaseRun.announce")(function* announce(
   }
 });
 
+const prepareReady = Effect.fn("ReleaseRun.prepareReady")(
+  function* prepareReady(config: ReleaseConfig) {
+    const store = yield* ReadyStore;
+    const ready = yield* prepare(config);
+    yield* store.write(ready).pipe(Effect.mapError(storageRefusal));
+
+    return ready;
+  }
+);
+
 const admit = Effect.fn("ReleaseRun.admit")(function* admit(
   input: DriverInput
 ) {
   const store = yield* ReadyStore;
   const log = yield* RunLog;
-
-  if (input.options.action === "ready") {
-    const ready = yield* prepare(input.config);
-    yield* store.write(ready).pipe(Effect.mapError(storageRefusal));
-
-    return { persisted: null, ready };
-  }
 
   if (input.options.admittedRepo !== input.config.repo) {
     return yield* Effect.fail(
@@ -306,81 +322,88 @@ const step = Effect.fn("ReleaseRun.step")(function* step(
   );
 });
 
-const drive = Effect.fn("ReleaseRun.drive")(function* drive(
-  context: DriverContext
-) {
-  if (context.persisted === null) {
-    return context;
-  }
+const requirePersisted = Effect.fn("ReleaseRun.requirePersisted")(
+  function* requirePersisted(context: DriverContext) {
+    if (context.persisted === null) {
+      return yield* Effect.die(
+        new Error("A release stage requires an admitted release snapshot")
+      );
+    }
 
-  const snapshot = yield* readRelease(context.persisted);
-  const state = snapshot.value;
-  yield* announce(context.config, context.state, state);
+    return context.persisted;
+  }
+);
+
+const stageOutput = Effect.fn("ReleaseRun.stageOutput")(function* stageOutput(
+  context: DriverContext,
+  outcome: ReleaseOutcome | null
+): Effect.fn.Return<StageOutput> {
+  const persisted = yield* requirePersisted(context);
+
+  return { context, outcome, snapshot: yield* readRelease(persisted) };
+});
+
+const claim = Effect.fn("ReleaseRun.claim")(function* claim(
+  context: DriverContext,
+  kind: ReleaseIntent["kind"]
+) {
+  const persisted = yield* requirePersisted(context);
+  const snapshot = yield* readRelease(persisted);
 
   const intent = snapshot.context.intents.find(
-    (candidate) => !context.executed.includes(candidate.id)
+    (candidate) =>
+      candidate.kind === kind && !context.executed.includes(candidate.id)
   );
 
   if (intent === undefined) {
-    return { ...context, route: "finishing", state } satisfies DriverContext;
-  }
-
-  if (intent.kind === "Observe") {
-    return { ...context, route: "observing", state } satisfies DriverContext;
+    return yield* Effect.die(
+      new Error("A release stage requires its unexecuted intent")
+    );
   }
 
   const log = yield* RunLog;
   yield* log.append(runLines.intent({ intent }));
-  const executed = [...context.executed, intent.id];
 
-  if (intent.kind === "RequestReview") {
-    const { by, override, verdict, words } = context.options.admission;
-    const at = yield* Clock.currentTimeMillis;
-    const reviewed = events.reviewed({ at, by, verdict });
+  return {
+    context: { ...context, executed: [...context.executed, intent.id] },
+    intent,
+  };
+});
 
-    const admissionEvents =
-      verdict === "hold" && override
-        ? [reviewed, events.override({ at, by, reason: words })]
-        : [reviewed];
+const applyEvents = Effect.fn("ReleaseRun.applyEvents")(function* applyEvents(
+  context: DriverContext,
+  posted: readonly PostedReleaseEvent[],
+  outcome: ReleaseOutcome | null
+) {
+  const current = yield* requirePersisted(context);
+  const persisted = yield* step(context.config, current, posted);
 
-    const reviewedState = yield* step(
-      context.config,
-      context.persisted,
-      admissionEvents
-    );
+  return yield* stageOutput({ ...context, persisted }, outcome);
+});
 
-    const admitted = yield* readRelease(reviewedState);
-
-    const persisted = admitted.matches("armed")
-      ? yield* step(context.config, reviewedState, [
-          events.fire({ at: yield* Clock.currentTimeMillis, by }),
-        ])
-      : reviewedState;
-
-    return {
-      ...context,
-      executed,
-      persisted,
-      state: (yield* readRelease(persisted)).value,
-    };
-  }
+const perform = Effect.fn("ReleaseRun.perform")(function* perform(
+  context: DriverContext,
+  kind: ReleaseIntent["kind"]
+) {
+  const claimed = yield* claim(context, kind);
 
   const outcome = yield* executeRelease(
     jobs.release({
       head: context.config.input.target,
-      intent,
+      intent: claimed.intent,
       repo: context.config.repo,
       target: context.config.input.runId,
     }),
     { baseBranch: "main", baselineWorkflows: {}, mode: context.options.mode }
   );
 
-  yield* log.append(runLines.outcome({ id: intent.id, outcome }));
+  const log = yield* RunLog;
+  yield* log.append(runLines.outcome({ id: claimed.intent.id, outcome }));
 
   if (
     outcome.status === "failed" &&
     outcome.events.length === 0 &&
-    intent.kind !== "NotifyOwner"
+    kind !== "NotifyOwner"
   ) {
     return yield* new ExecutorError({
       code: "provider",
@@ -388,7 +411,30 @@ const drive = Effect.fn("ReleaseRun.drive")(function* drive(
     });
   }
 
-  const planned = outcome.events.find((event) =>
+  return { context: claimed.context, outcome };
+});
+
+const executeStage = Effect.fn("ReleaseRun.executeStage")(
+  function* executeStage(
+    context: DriverContext,
+    kind: "Baseline" | "Deploy" | "NotifyOwner" | "Restore"
+  ) {
+    const performed = yield* perform(context, kind);
+
+    return yield* applyEvents(
+      performed.context,
+      performed.outcome.events,
+      performed.outcome
+    );
+  }
+);
+
+const plan = Effect.fn("ReleaseRun.plan")(function* plan(
+  context: DriverContext
+) {
+  const performed = yield* perform(context, "PlanRelease");
+
+  const planned = performed.outcome.events.find((event) =>
     Predicate.isTagged(event, "planned")
   );
 
@@ -404,43 +450,80 @@ const drive = Effect.fn("ReleaseRun.drive")(function* drive(
     });
   }
 
-  const persisted = yield* step(
-    context.config,
-    context.persisted,
-    outcome.events
+  return yield* applyEvents(
+    performed.context,
+    performed.outcome.events,
+    performed.outcome
   );
+});
 
-  return {
-    ...context,
-    executed,
-    persisted,
-    route: outcome.status === "recorded-would-do" ? "finishing" : "driving",
-    state: (yield* readRelease(persisted)).value,
-  } satisfies DriverContext;
+const review = Effect.fn("ReleaseRun.review")(function* review(
+  context: DriverContext
+) {
+  const claimed = yield* claim(context, "RequestReview");
+  const { by, verdict } = context.options.admission;
+
+  return yield* applyEvents(
+    claimed.context,
+    [events.reviewed({ at: yield* Clock.currentTimeMillis, by, verdict })],
+    null
+  );
+});
+
+const override = Effect.fn("ReleaseRun.override")(function* override(
+  context: DriverContext
+) {
+  const { by, words } = context.options.admission;
+
+  return yield* applyEvents(
+    context,
+    [
+      events.override({
+        at: yield* Clock.currentTimeMillis,
+        by,
+        reason: words,
+      }),
+    ],
+    null
+  );
+});
+
+const fireRelease = Effect.fn("ReleaseRun.fire")(function* fireRelease(
+  context: DriverContext
+) {
+  return yield* applyEvents(
+    context,
+    [
+      events.fire({
+        at: yield* Clock.currentTimeMillis,
+        by: context.options.admission.by,
+      }),
+    ],
+    null
+  );
 });
 
 const observe = Effect.fn("ReleaseRun.observe")(function* observe(
   context: DriverContext
 ) {
-  if (context.persisted === null) {
-    return context;
-  }
-
-  const original = yield* readRelease(context.persisted);
+  const persisted = yield* requirePersisted(context);
+  const original = yield* readRelease(persisted);
 
   const intent = original.context.intents.findLast(
     (candidate) => candidate.kind === "Observe"
   );
 
   if (intent?.kind !== "Observe") {
-    return context;
+    return yield* Effect.die(
+      new Error("Observation requires an Observe intent")
+    );
   }
 
   const log = yield* RunLog;
   const verdicts = yield* VerdictSink;
 
   const actor = yield* createEffectActor(releaseMachine, {
-    snapshot: context.persisted,
+    snapshot: persisted,
   });
 
   const mutex = yield* Semaphore.make(1);
@@ -531,32 +614,47 @@ const observe = Effect.fn("ReleaseRun.observe")(function* observe(
     ),
   ]);
 
-  return {
-    ...context,
-    executed: [...context.executed, intent.id],
-    persisted: actor.getPersistedSnapshot(),
-    route: "driving",
-    state: actor.getSnapshot().value,
-  } satisfies DriverContext;
+  return yield* stageOutput(
+    {
+      ...context,
+      executed: [...context.executed, intent.id],
+      persisted: actor.getPersistedSnapshot(),
+    },
+    null
+  );
 }, Effect.scoped);
 
 const finish = Effect.fn("ReleaseRun.finish")(function* finish(
   context: DriverContext
 ) {
+  const output = yield* stageOutput(context, null);
   const sink = yield* MessageSink;
   const log = yield* RunLog;
-  yield* log.append(runLines.finished({ state: context.state }));
+  yield* log.append(runLines.finished({ state: output.snapshot.value }));
   yield* sink
-    .send(`finished: ${context.state}`)
+    .send(`finished: ${output.snapshot.value}`)
     .pipe(Effect.catch(() => Effect.void));
 
-  if (context.state === "held" || context.state === "escalated") {
-    yield* sink
-      .page(
-        `release ${context.config.name} ${context.config.input.target.slice(0, 8)}: ${context.state}`
-      )
-      .pipe(Effect.catch(() => Effect.void));
-  }
+  return output;
+});
+
+const page = Effect.fn("ReleaseRun.page")(function* page(
+  context: DriverContext
+) {
+  const output = yield* stageOutput(context, null);
+  const sink = yield* MessageSink;
+  yield* sink
+    .page(
+      `release ${context.config.name} ${context.config.input.target.slice(0, 8)}: ${output.snapshot.value}`
+    )
+    .pipe(Effect.catch(() => Effect.void));
+
+  return output;
+});
+
+const prepareTask = createEffectLogic({
+  effect: ({ input }) => prepareReady(input.config).pipe(Effect.result),
+  schemas: { input: types<DriverInput>() },
 });
 
 const admissionTask = createEffectLogic({
@@ -564,9 +662,69 @@ const admissionTask = createEffectLogic({
   schemas: { input: types<DriverInput>() },
 });
 
-const driveTask = createEffectLogic({
+const planTask = createEffectLogic({
   effect: ({ input }) =>
-    drive(input).pipe(Effect.mapError(executionRefusal), Effect.result),
+    plan(input).pipe(Effect.mapError(executionRefusal), Effect.result),
+  schemas: { input: types<DriverContext>() },
+});
+
+const reviewTask = createEffectLogic({
+  effect: ({ input }) =>
+    review(input).pipe(Effect.mapError(executionRefusal), Effect.result),
+  schemas: { input: types<DriverContext>() },
+});
+
+const overrideTask = createEffectLogic({
+  effect: ({ input }) =>
+    override(input).pipe(Effect.mapError(executionRefusal), Effect.result),
+  schemas: { input: types<DriverContext>() },
+});
+
+const fireTask = createEffectLogic({
+  effect: ({ input }) =>
+    fireRelease(input).pipe(Effect.mapError(executionRefusal), Effect.result),
+  schemas: { input: types<DriverContext>() },
+});
+
+const baselineTask = createEffectLogic({
+  effect: ({ input }) =>
+    executeStage(input, "Baseline").pipe(
+      Effect.mapError(executionRefusal),
+      Effect.result
+    ),
+  schemas: { input: types<DriverContext>() },
+});
+
+const deployTask = createEffectLogic({
+  effect: ({ input }) =>
+    executeStage(input, "Deploy").pipe(
+      Effect.mapError(executionRefusal),
+      Effect.result
+    ),
+  schemas: { input: types<DriverContext>() },
+});
+
+const restoreTask = createEffectLogic({
+  effect: ({ input }) =>
+    executeStage(input, "Restore").pipe(
+      Effect.mapError(executionRefusal),
+      Effect.result
+    ),
+  schemas: { input: types<DriverContext>() },
+});
+
+const notifyTask = createEffectLogic({
+  effect: ({ input }) =>
+    executeStage(input, "NotifyOwner").pipe(
+      Effect.mapError(executionRefusal),
+      Effect.result
+    ),
+  schemas: { input: types<DriverContext>() },
+});
+
+const pageTask = createEffectLogic({
+  effect: ({ input }) =>
+    page(input).pipe(Effect.mapError(executionRefusal), Effect.result),
   schemas: { input: types<DriverContext>() },
 });
 
@@ -583,7 +741,21 @@ const finishTask = createEffectLogic({
 });
 
 export const releaseDriverMachine = setupEffect({
-  actors: { admissionTask, driveTask, finishTask, observeTask },
+  actors: {
+    admissionTask,
+    baselineTask,
+    deployTask,
+    finishTask,
+    fireTask,
+    notifyTask,
+    observeTask,
+    overrideTask,
+    pageTask,
+    planTask,
+    prepareTask,
+    restoreTask,
+    reviewTask,
+  },
   schemas: { context: types<DriverContext>(), input: types<DriverInput>() },
 }).createMachine({
   context: ({ input }) => ({
@@ -592,69 +764,301 @@ export const releaseDriverMachine = setupEffect({
     executed: [],
     persisted: null,
     ready: null,
-    route: "driving",
-    state: "planned",
   }),
   initial: "admitting",
   states: {
+    accepted: { type: "final" },
     admitting: {
+      always: ({ context }) =>
+        context.options.action === "ready"
+          ? { target: "preparing" }
+          : undefined,
       invoke: {
         input: ({ context }) => context,
         onDone: ({ context, event }) =>
           Predicate.isTagged(event.output, "Failure")
             ? {
                 context: { ...context, error: event.output.failure },
-                target: "finished",
+                target: "refused",
               }
             : {
                 context: { ...context, ...event.output.success },
-                target:
-                  context.options.action === "ready" ? "finished" : "driving",
+                target: "planning",
               },
         src: "admissionTask",
       },
     },
-    driving: {
+    armed: { type: "final" },
+    baselining: {
       invoke: {
         input: ({ context }) => context,
         onDone: ({ context, event }) =>
           Predicate.isTagged(event.output, "Failure")
             ? {
                 context: { ...context, error: event.output.failure },
-                target: "finishing",
+                target: "completing",
               }
-            : {
-                context: event.output.success,
-                reenter: true,
-                target: event.output.success.route,
-              },
-        src: "driveTask",
+            : { context: event.output.success.context, target: "deploying" },
+        src: "baselineTask",
       },
     },
-    finished: { type: "final" },
-    finishing: {
+    completing: {
+      invoke: {
+        input: ({ context }) => context,
+        onDone: ({ context, event }) => {
+          if (Predicate.isTagged(event.output, "Failure")) {
+            return {
+              context: { ...context, error: event.output.failure },
+              target: "refused",
+            };
+          }
+
+          const { snapshot } = event.output.success;
+
+          if (context.error !== null) {
+            return { target: "refused" };
+          }
+
+          if (snapshot.matches("accepted")) {
+            return { target: "accepted" };
+          }
+
+          if (snapshot.matches("restored")) {
+            return { target: "restored" };
+          }
+
+          if (snapshot.matches("armed")) {
+            return { target: "armed" };
+          }
+
+          if (snapshot.matches("planned")) {
+            return { target: "rehearsed" };
+          }
+
+          if (snapshot.matches("reviewHeld")) {
+            return { target: "reviewHeld" };
+          }
+
+          if (snapshot.matches("held") || snapshot.matches("escalated")) {
+            return { target: "paging" };
+          }
+
+          return {
+            context: {
+              ...context,
+              error: refusals.Execution({
+                harm: "Release completion has no supported terminal outcome.",
+                next: "Inspect the run log and reconcile the release before starting another.",
+              }),
+            },
+            target: "refused",
+          };
+        },
+        src: "finishTask",
+      },
+    },
+    deploying: {
+      invoke: {
+        input: ({ context }) => context,
+        onDone: ({ context, event }) => {
+          if (Predicate.isTagged(event.output, "Failure")) {
+            return {
+              context: { ...context, error: event.output.failure },
+              target: "completing",
+            };
+          }
+
+          const output = event.output.success;
+
+          return {
+            context: output.context,
+            target: output.snapshot.matches("observing")
+              ? "observing"
+              : "notifying",
+          };
+        },
+        src: "deployTask",
+      },
+    },
+    escalated: { type: "final" },
+    firing: {
+      invoke: {
+        input: ({ context }) => context,
+        onDone: ({ context, event }) =>
+          Predicate.isTagged(event.output, "Failure")
+            ? {
+                context: { ...context, error: event.output.failure },
+                target: "completing",
+              }
+            : {
+                context: event.output.success.context,
+                target: event.output.success.snapshot.matches("fired")
+                  ? "baselining"
+                  : "completing",
+              },
+        src: "fireTask",
+      },
+    },
+    held: { type: "final" },
+    notifying: {
       invoke: {
         input: ({ context }) => context,
         onDone: ({ context, event }) => ({
           context: Predicate.isTagged(event.output, "Failure")
             ? { ...context, error: event.output.failure }
-            : context,
-          target: "finished",
+            : event.output.success.context,
+          target: "completing",
         }),
-        src: "finishTask",
+        src: "notifyTask",
       },
     },
     observing: {
+      invoke: {
+        input: ({ context }) => context,
+        onDone: ({ context, event }) => {
+          if (Predicate.isTagged(event.output, "Failure")) {
+            return {
+              context: { ...context, error: event.output.failure },
+              target: "completing",
+            };
+          }
+
+          const output = event.output.success;
+
+          if (output.snapshot.matches("restoring")) {
+            return { context: output.context, target: "restoring" };
+          }
+
+          return {
+            context: output.context,
+            target: output.snapshot.matches("escalated")
+              ? "notifying"
+              : "completing",
+          };
+        },
+        src: "observeTask",
+      },
+    },
+    overriding: {
       invoke: {
         input: ({ context }) => context,
         onDone: ({ context, event }) =>
           Predicate.isTagged(event.output, "Failure")
             ? {
                 context: { ...context, error: event.output.failure },
-                target: "finishing",
+                target: "completing",
               }
-            : { context: event.output.success, target: "driving" },
-        src: "observeTask",
+            : {
+                context: event.output.success.context,
+                target: event.output.success.snapshot.matches("armed")
+                  ? "firing"
+                  : "completing",
+              },
+        src: "overrideTask",
+      },
+    },
+    paging: {
+      invoke: {
+        input: ({ context }) => context,
+        onDone: ({ context, event }) => {
+          if (Predicate.isTagged(event.output, "Failure")) {
+            return {
+              context: { ...context, error: event.output.failure },
+              target: "refused",
+            };
+          }
+
+          const { snapshot } = event.output.success;
+
+          if (snapshot.matches("held")) {
+            return { target: "held" };
+          }
+
+          return { target: "escalated" };
+        },
+        src: "pageTask",
+      },
+    },
+    planning: {
+      invoke: {
+        input: ({ context }) => context,
+        onDone: ({ context, event }) =>
+          Predicate.isTagged(event.output, "Failure")
+            ? {
+                context: { ...context, error: event.output.failure },
+                target: "completing",
+              }
+            : {
+                context: event.output.success.context,
+                target:
+                  event.output.success.snapshot.matches("review") &&
+                  event.output.success.outcome?.status !== "recorded-would-do"
+                    ? "reviewing"
+                    : "completing",
+              },
+        src: "planTask",
+      },
+    },
+    preparing: {
+      invoke: {
+        input: ({ context }) => context,
+        onDone: ({ context, event }) =>
+          Predicate.isTagged(event.output, "Failure")
+            ? {
+                context: { ...context, error: event.output.failure },
+                target: "refused",
+              }
+            : {
+                context: { ...context, ready: event.output.success },
+                target: "ready",
+              },
+        src: "prepareTask",
+      },
+    },
+    ready: { type: "final" },
+    refused: { type: "final" },
+    rehearsed: { type: "final" },
+    restored: { type: "final" },
+    restoring: {
+      invoke: {
+        input: ({ context }) => context,
+        onDone: ({ context, event }) => ({
+          context: Predicate.isTagged(event.output, "Failure")
+            ? { ...context, error: event.output.failure }
+            : event.output.success.context,
+          target: "completing",
+        }),
+        src: "restoreTask",
+      },
+    },
+    reviewHeld: { type: "final" },
+    reviewing: {
+      invoke: {
+        input: ({ context }) => context,
+        onDone: ({ context, event }) => {
+          if (Predicate.isTagged(event.output, "Failure")) {
+            return {
+              context: { ...context, error: event.output.failure },
+              target: "completing",
+            };
+          }
+
+          const output = event.output.success;
+
+          if (output.snapshot.matches("armed")) {
+            return { context: output.context, target: "firing" };
+          }
+
+          return {
+            context: output.context,
+            target:
+              output.snapshot.matches("reviewHeld") &&
+              context.options.admission.override
+                ? "overriding"
+                : "completing",
+          };
+        },
+        src: "reviewTask",
       },
     },
   },
@@ -685,44 +1089,25 @@ const runDriver = Effect.fn("ReleaseRun.driver")(function* runDriver(
     return yield* Effect.fail(snapshot.context.error);
   }
 
-  return { ready: snapshot.context.ready, state: snapshot.context.state };
+  return { ready: snapshot.context.ready, state: snapshot.value };
 }, Effect.scoped);
 
 export const decodeReleaseConfig = (text: string) =>
-  Schema.decodeEffect(Schema.fromJsonString(ReleaseConfigSchema))(text).pipe(
-    Effect.mapError(() =>
-      refusals.Configuration({
-        harm: "Release configuration is unreadable or invalid.",
-        next: "Correct the JSON config against ReleaseConfigSchema before preparing or firing.",
-      })
-    )
-  );
+  Schema.decodeEffect(Schema.fromJsonString(ReleaseConfigSchema), {
+    errors: "all",
+  })(text).pipe(Effect.mapError(releaseConfigRefusal));
 
 export const runRelease = Effect.fn("ReleaseRun.run")(function* runRelease(
   configValue: ReleaseConfig,
   options: ReleaseRunOptions
 ) {
-  const config = yield* Schema.decodeEffect(ReleaseConfigSchema)(
-    configValue
-  ).pipe(
-    Effect.mapError(() =>
-      refusals.Configuration({
-        harm: "Release configuration is invalid.",
-        next: "Correct the config against ReleaseConfigSchema before preparing or firing.",
-      })
-    )
-  );
+  const config = yield* Schema.decodeEffect(ReleaseConfigSchema, {
+    errors: "all",
+  })(configValue).pipe(Effect.mapError(releaseConfigRefusal));
 
-  const admission = yield* Schema.decodeEffect(AdmissionSchema)(
-    options.admission
-  ).pipe(
-    Effect.mapError(() =>
-      refusals.Admission({
-        harm: "Operator admission lacks a name or their words.",
-        next: "Supply the operator's by and words with approve or hold and an explicit override decision.",
-      })
-    )
-  );
+  const admission = yield* Schema.decodeEffect(AdmissionSchema, {
+    errors: "all",
+  })(options.admission).pipe(Effect.mapError(releaseAdmissionRefusal));
 
   const program = runDriver({
     config,
