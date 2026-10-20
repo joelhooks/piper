@@ -81,7 +81,7 @@ const ApiRuns = Schema.Struct({
   ),
 });
 
-const Checks = Effect.fn("Executor.checks")(function* Checks(
+export const readChecks = Effect.fn("Executor.checks")(function* readChecks(
   repo: string,
   head: string
 ) {
@@ -349,7 +349,7 @@ const executeTrain = Effect.fn("Executor.train")(function* executeTrain(
       return result([
         events.checks({
           at,
-          checks: yield* Checks(job.repo, intent.head),
+          checks: yield* readChecks(job.repo, intent.head),
           head: intent.head,
         }),
       ]);
@@ -421,7 +421,7 @@ const executeTrain = Effect.fn("Executor.train")(function* executeTrain(
     }
 
     case "RerunChecks": {
-      const checks = yield* Checks(job.repo, intent.head);
+      const checks = yield* readChecks(job.repo, intent.head);
 
       const ids = [
         ...new Set(
@@ -632,7 +632,7 @@ const executeSolo = Effect.fn("Executor.solo")(function* executeSolo(
 
   switch (intent.kind) {
     case "PollChecks": {
-      const checks = (yield* Checks(job.repo, intent.sha)).filter((check) =>
+      const checks = (yield* readChecks(job.repo, intent.sha)).filter((check) =>
         intent.checks.includes(check.name)
       );
 
@@ -666,8 +666,8 @@ const executeSolo = Effect.fn("Executor.solo")(function* executeSolo(
     }
 
     case "RunBaseline": {
-      const checks = (yield* Checks(job.repo, intent.base)).filter((check) =>
-        intent.checks.includes(check.name)
+      const checks = (yield* readChecks(job.repo, intent.base)).filter(
+        (check) => intent.checks.includes(check.name)
       );
 
       if (

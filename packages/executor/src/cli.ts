@@ -15,6 +15,7 @@ import {
   releaseWriters,
 } from "./release.js";
 import { TokenProvider } from "./token.js";
+import { trainCommand } from "./train-cli.js";
 import { Transport } from "./transport.js";
 import { Outbox } from "./worker.js";
 import { writers } from "./writes.js";
@@ -117,6 +118,7 @@ const command = Command.make(
 
 NodeRuntime.runMain(
   command.pipe(
+    Command.withSubcommands([trainCommand]),
     Command.run({ version: "0.2.0" }),
     Effect.provide(NodeServices.layer)
   )

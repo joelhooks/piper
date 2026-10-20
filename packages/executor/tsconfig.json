@@ -8,6 +8,7 @@
           "effect/http/HttpClient",
           "effect/http/HttpClientRequest",
           "effect/http/FetchHttpClient",
+          "effect/cli/Argument",
           "effect/cli/Command",
           "effect/cli/Flag",
           "effect/process/ChildProcess",

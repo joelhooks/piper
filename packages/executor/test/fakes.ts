@@ -1,3 +1,4 @@
+import type { CheckRun } from "@joelhooks/piper/domain";
 import { Data, Effect, Layer } from "effect";
 
 import { ExecutorError } from "../src/domain.js";
@@ -188,21 +189,40 @@ export const cases = [
   },
 ];
 
+interface CheckControls {
+  candidateChecks: readonly CheckRun[] | undefined;
+  trainChecks: readonly CheckRun[] | undefined;
+}
+
 export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
   const reads: string[] = [];
   const writes: Write[] = [];
   const records: WouldDo[] = [];
   const posted: Event[] = [];
 
+  const checkControls: CheckControls = {
+    candidateChecks: undefined,
+    trainChecks: undefined,
+  };
+
   const controls = {
+    ...checkControls,
+    baseHead: BASE,
     baseline: true,
+    carHead: car.headSha,
     conflict: false,
     crash: false,
     failPost: false,
     graphqlErrors: false,
     head: HEAD,
     labelMissing: false,
+    mergeRefused: false,
+    moveBaseAfterBuild: false,
+    moveCarAfterBuild: false,
     refMissing: false,
+    rerunGuardRealRed: false,
+    runner: false,
+    upToDate: true,
   };
 
   const read = Effect.fn("Fake.read")(function* read(
@@ -220,6 +240,26 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
 
     if (path.includes("/check-runs?")) {
       const head = decodeURIComponent(path.split("/")[2] ?? HEAD);
+
+      const configured =
+        head === car.headSha ? controls.candidateChecks : controls.trainChecks;
+
+      if (configured !== undefined) {
+        return {
+          check_runs: configured.map((check) => ({
+            ...check,
+            check_suite: { id: 10 },
+            conclusion:
+              controls.rerunGuardRealRed &&
+              head !== car.headSha &&
+              reads.filter((entry) => entry === path).length > 1
+                ? "failure"
+                : check.conclusion,
+            head_sha: head,
+          })),
+          total_count: configured.length,
+        };
+      }
 
       return {
         check_runs:
@@ -239,8 +279,31 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
       };
     }
 
+    if (path.startsWith("/compare/")) {
+      return {
+        merge_base_commit: {
+          sha: controls.upToDate ? controls.baseHead : "old-base",
+        },
+      };
+    }
+
     if (path.startsWith("/pulls/")) {
-      return { head: { sha: controls.head }, node_id: "node-3", number: 3 };
+      const head =
+        controls.runner && path === `/pulls/${car.number}`
+          ? controls.carHead
+          : controls.head;
+
+      return {
+        head: { sha: head },
+        labels: [],
+        node_id: "node-3",
+        number: 3,
+        user: { login: car.owner },
+      };
+    }
+
+    if (path === "/git/ref/heads/trunk") {
+      return { object: { sha: controls.baseHead } };
     }
 
     if (path.startsWith("/git/ref/")) {
@@ -249,7 +312,7 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
             code: "not-found",
             message: "synthetic missing ref",
           })
-        : { object: { sha: HEAD } };
+        : { object: { sha: controls.head } };
     }
 
     return yield* new ExecutorError({
@@ -286,11 +349,31 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
         });
       }
 
+      if (controls.runner) {
+        controls.head = "built-a";
+
+        if (controls.moveBaseAfterBuild) {
+          controls.baseHead = "base-b";
+        }
+
+        if (controls.moveCarAfterBuild) {
+          controls.carHead = "car-b";
+        }
+      }
+
       return { sha: "built-a" };
     }
 
     if (operation.path.endsWith("/merge")) {
-      return { merged: true, message: "synthetic merge", sha: "merged-a" };
+      return {
+        merged: !controls.mergeRefused,
+        message: "synthetic merge",
+        sha: "merged-a",
+      };
+    }
+
+    if (controls.runner && operation.path.endsWith("/rerun-failed-jobs")) {
+      controls.trainChecks = undefined;
     }
 
     if (operation.path === "/pulls") {

@@ -186,6 +186,10 @@ pnpm executor --repo sample/project --api https://worker.invalid --mode dry-run
 
 Read-derived check observations and advisory judge failures still go back to the Worker using authenticated event POSTs. **This means dry-run is read-only against GitHub, not against Piper.** Use a separate shadow Worker if its authoritative machine must remain untouched. Compare the journal with the human operator's actions. This package has not been qualified against a real GitHub repository.
 
+### One admitted train
+
+`pnpm executor train <admission.json> <state-dir>` runs one admitted car in-process, without a Worker. It uses a separate `polling`/`draining` machine, requires an explicit base branch, refuses automatic resumption after possible writes, and preserves the queue driver's JSON lines. Dry-run ends after the proposed build. See [the train admission, state and line contract](packages/executor/TRAIN.md).
+
 ### Configuration and ports
 
 - `GITHUB_TOKEN`: a short-lived installation token. `PIPER_GITHUB_TOKEN_EXPIRES_AT` declares its expiration as epoch milliseconds. Empty, expired, undeclared, or over-one-hour leases fail closed. The supplied Layer rechecks expiry on every GitHub call. Restart with a fresh lease when it expires; a custom `TokenProvider` Layer can renew leases per call. No private key or token is persisted or logged.
@@ -233,7 +237,7 @@ Changing from dry-run to live does not replay previously recorded proposals. Use
 
 ### Landed credit
 
-A CI pass or an `accepted` Release health result is an observation, never landed plan credit. `OperatorAcceptanceSchema` accepts explicit operator facts `{ kind: "operator-acceptance", by, at, nodes }`; `landedNodes` derives only those accepted node IDs. An operator may supply those IDs when posting a plan event. The executor never emits GO, plan acceptance, or landed-credit facts from a check result or a provider merge response.
+A CI pass or an `accepted` Release health result is an observation, never landed plan credit. `OperatorAcceptanceSchema` accepts explicit operator facts `{ kind: "operator-acceptance", by, at, nodes }`; `landedNodes` derives only those accepted node IDs. An operator may supply those IDs when posting a plan event. The Worker-outbox executor never emits GO, plan acceptance, or landed-credit facts from a check result or a provider merge response. The admitted train runner posts head-bound GO using its explicit `goBy` admission; it still emits no plan acceptance or landed-credit facts.
 
 ## Shadow
 
