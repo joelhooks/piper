@@ -38,7 +38,9 @@ Live mode requires `PIPER_LIVE_ADMITTED_REPO` to equal `repo` exactly. Refusal h
 
 ## Lifecycle and stops
 
-The runner machine uses `setupEffect` and starts through `createEffectActor`. Preparation checks admission and saved state. `polling` observes the base, car and train. `draining` executes one unseen intent at a time. Final states are `landed`, `stopped` and `rehearsed`. Flags, seen IDs and the conservative write count belong to machine context. One `Schedule.spaced` supplies the poll interval; draining has no clock.
+The runner machine uses `setupEffect` and starts through `createEffectActor`. Preparation checks admission and saved state. `boarding.polling` posts candidates and departs once. `boarding.draining` executes unseen intents until a successful `BuildTrain` moves it into `riding.draining`. An empty boarding drain stops with `car not boarded`. `riding.polling` posts tick and head-bound GO, then `riding.draining` executes one unseen intent per invocation. An empty riding drain returns to polling. Final states are `landed`, `stopped` and `rehearsed`.
+
+The graph carries departure, build and drain progress. Context holds admission, the persisted core train, seen IDs, the conservative write count and any refusal. It has no lifecycle flags. Observations carry the drained intent kind and restored core snapshot into explicit transitions. One `Schedule.spaced` supplies the riding poll interval; boarding and draining have no clock.
 
 Allowed intents are `BuildTrain`, `OpenTrainPr`, `PollChecks`, `MarkReady`, `Merge`, `RemoveLabels` and `RerunChecks`. A build must target `train/<train>` and contain exactly the admitted car and head. Other intents stop this train.
 
@@ -78,7 +80,7 @@ An existing state with `writes > 0` always refuses automatic resumption: harm `d
 
 ## Test evidence
 
-The runner has 37 tests, including a generated rerun-safety property. [The sanitized mutation receipt](../../docs/train-runner-proof.json) records each case failing under planted runtime faults, then passing after restoration. The faults ran in combined sweeps; this is a red/green sensitivity check, not an exhaustive mutation score. All fixtures are synthetic.
+The runner has 39 tests, including a generated rerun-safety property. A live actor trace asserts every reachable leaf state across landed, rehearsed and refused runs. A failed dry build must stop rather than enter the rehearsal final state. All fixtures are synthetic. Mutation receipts belong to the delivery packet, not the public source tree.
 
 ## Library
 

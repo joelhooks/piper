@@ -1,3 +1,4 @@
+import type { Intent } from "@joelhooks/piper/domain";
 import { PostedEventSchema, toTrainEvent } from "@joelhooks/piper/domain";
 import {
   openTrain,
@@ -5,7 +6,11 @@ import {
   stateName,
   stepTrain,
 } from "@joelhooks/piper/host";
-import type { PersistedTrain, TrainFinished } from "@joelhooks/piper/host";
+import type {
+  PersistedTrain,
+  TrainFinished,
+  TrainSnapshot,
+} from "@joelhooks/piper/host";
 import {
   Clock,
   Config,
@@ -24,7 +29,6 @@ import type { RecordSink } from "./record-sink.js";
 import type { TrainAdmission, TrainStop } from "./train-domain.js";
 import {
   admittedIntent,
-  notBoarded,
   rerunFaults,
   rerunRefusal,
   stops,
@@ -35,15 +39,44 @@ import { recordTrain, TrainStore } from "./train-store.js";
 
 export interface RunnerContext {
   readonly admission: TrainAdmission | undefined;
-  readonly built: boolean;
-  readonly departed: boolean;
-  readonly drained: boolean;
-  readonly result: "landed" | "rehearsal complete" | undefined;
   readonly seen: readonly string[];
   readonly stop: TrainStop | undefined;
   readonly train: PersistedTrain | undefined;
   readonly writes: number;
 }
+
+const recoverLedger = Effect.fn("Train.recoverLedger")(function* recoverLedger(
+  context: RunnerContext,
+  message: string
+) {
+  const store = yield* TrainStore;
+  const saved = yield* store.load.pipe(Effect.orElseSucceed(() => null));
+
+  return {
+    ...context,
+    seen: saved?.seen ?? context.seen,
+    stop: unavailable(message),
+    writes: saved?.writes ?? context.writes,
+  };
+});
+
+const observe = Effect.fn("Train.observe")(function* observe<
+  R,
+  E extends { readonly message: string },
+>(
+  context: RunnerContext,
+  task: Effect.Effect<RunnerContext, E, R>,
+  intent?: Intent["kind"]
+) {
+  const next = yield* task.pipe(
+    Effect.catch((error) => recoverLedger(context, error.message))
+  );
+
+  const snapshot =
+    next.train === undefined ? undefined : yield* readTrain(next.train);
+
+  return { context: next, intent, snapshot };
+});
 
 const save = Effect.fn("Train.save")(function* save(context: RunnerContext) {
   const store = yield* TrainStore;
@@ -136,8 +169,6 @@ export const initializeTrain = Effect.fn("Train.initialize")(
 
     const ready: RunnerContext = {
       ...context,
-      built: snapshot.context.build !== undefined,
-      departed: snapshot.context.build !== undefined,
       seen: (existing?.seen ?? []).filter(
         (id) =>
           admission.mode !== "dry-run" ||
@@ -174,8 +205,72 @@ const CompareSchema = Schema.Struct({
   merge_base_commit: Schema.Struct({ sha: Schema.NonEmptyString }),
 });
 
+interface PollObservation {
+  readonly admission: TrainAdmission;
+  readonly at: number;
+  readonly base: string;
+  readonly pull: typeof PullSchema.Type;
+  readonly snapshot: TrainSnapshot;
+  readonly train: PersistedTrain;
+}
+
+type PostObservation = (
+  observation: PollObservation
+) => Effect.Effect<PersistedTrain, ExecutorError | TrainFinished, GitHub>;
+
+const depart = Effect.fn("Train.depart")(function* depart({
+  admission,
+  at,
+  base,
+  pull,
+  train,
+}: PollObservation) {
+  const github = yield* GitHub;
+
+  return yield* stepTrain(train, [
+    {
+      at,
+      candidates: [
+        {
+          checks: yield* readChecks(admission.repo, admission.car.headSha),
+          headSha: admission.car.headSha,
+          labels: [
+            ...pull.labels.map((label) => label.name),
+            admission.input.trainLabel,
+          ],
+          number: admission.car.number,
+          operatorReviewed: true,
+          owner: pull.user.login,
+          upToDate:
+            (yield* decode(CompareSchema)(
+              yield* github.read(
+                admission.repo,
+                `/compare/${encodeURIComponent(base)}...${encodeURIComponent(admission.car.headSha)}`
+              )
+            )).merge_base_commit.sha === base,
+        },
+      ],
+      main: base,
+      type: "candidates",
+    },
+    { at, type: "depart" },
+  ]);
+});
+
+const tick = ({ admission, at, snapshot, train }: PollObservation) =>
+  stepTrain(
+    train,
+    snapshot.context.head === undefined
+      ? [{ at, type: "tick" }]
+      : [
+          { at, type: "tick" },
+          { at, by: admission.goBy, head: snapshot.context.head, type: "go" },
+        ]
+  );
+
 const poll = Effect.fn("Train.poll")(function* poll(
-  context: RunnerContext
+  context: RunnerContext,
+  post: PostObservation
 ): Effect.fn.Return<
   RunnerContext,
   ExecutorError | TrainFinished,
@@ -187,20 +282,11 @@ const poll = Effect.fn("Train.poll")(function* poll(
     return context;
   }
 
-  if (context.departed) {
-    yield* Effect.void.pipe(
-      Effect.repeat({
-        schedule: Schedule.spaced(admission.input.pollMs),
-        times: 1,
-      })
-    );
-  }
-
   const snapshot = yield* readTrain(train);
 
   if (snapshot.status !== "active") {
     return stateName(snapshot) === "landed"
-      ? { ...context, result: "landed" satisfies RunnerContext["result"] }
+      ? context
       : {
           ...context,
           stop: stops.TrainEnded({
@@ -255,49 +341,14 @@ const poll = Effect.fn("Train.poll")(function* poll(
 
   const at = yield* Clock.currentTimeMillis;
 
-  const observed = context.departed
-    ? yield* stepTrain(
-        train,
-        snapshot.context.head === undefined
-          ? [{ at, type: "tick" }]
-          : [
-              { at, type: "tick" },
-              {
-                at,
-                by: admission.goBy,
-                head: snapshot.context.head,
-                type: "go",
-              },
-            ]
-      )
-    : yield* stepTrain(train, [
-        {
-          at,
-          candidates: [
-            {
-              checks: yield* readChecks(admission.repo, admission.car.headSha),
-              headSha: admission.car.headSha,
-              labels: [
-                ...pull.labels.map((label) => label.name),
-                admission.input.trainLabel,
-              ],
-              number: admission.car.number,
-              operatorReviewed: true,
-              owner: pull.user.login,
-              upToDate:
-                (yield* decode(CompareSchema)(
-                  yield* github.read(
-                    admission.repo,
-                    `/compare/${encodeURIComponent(base.object.sha)}...${encodeURIComponent(admission.car.headSha)}`
-                  )
-                )).merge_base_commit.sha === base.object.sha,
-            },
-          ],
-          main: base.object.sha,
-          type: "candidates",
-        },
-        { at, type: "depart" },
-      ]);
+  const observed = yield* post({
+    admission,
+    at,
+    base: base.object.sha,
+    pull,
+    snapshot,
+    train,
+  });
 
   const after = yield* readTrain(observed);
   yield* recordTrain({
@@ -306,26 +357,36 @@ const poll = Effect.fn("Train.poll")(function* poll(
     pr: after.context.pr,
     state: stateName(after),
   });
-  const next = { ...context, departed: true, drained: false, train: observed };
+  const next = { ...context, train: observed };
   yield* save(next);
 
   return next;
 });
 
-export const pollTrain = Effect.fn("Train.pollSafe")(function* pollTrain(
+export const boardTrain = (context: RunnerContext) =>
+  observe(context, poll(context, depart));
+
+export const pollTrain = Effect.fn("Train.ridingPoll")(function* pollTrain(
   context: RunnerContext
 ) {
-  return yield* poll(context).pipe(
-    Effect.orElseSucceed((error) => ({
-      ...context,
-      stop: unavailable(error.message),
-    }))
-  );
+  if (context.admission !== undefined) {
+    yield* Effect.void.pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced(context.admission.input.pollMs),
+        times: 1,
+      })
+    );
+  }
+
+  return yield* observe(context, poll(context, tick));
 });
 
 const jobs = Data.taggedEnum<Job>();
 
-const drain = Effect.fn("Train.drain")(function* drain(context: RunnerContext) {
+const drain = Effect.fn("Train.drain")(function* drain(
+  context: RunnerContext,
+  intent: Intent
+) {
   const { admission, train } = context;
 
   if (admission === undefined || train === undefined) {
@@ -333,18 +394,6 @@ const drain = Effect.fn("Train.drain")(function* drain(context: RunnerContext) {
   }
 
   const snapshot = yield* readTrain(train);
-
-  const intent = snapshot.context.intents.find(
-    (entry) => !context.seen.includes(entry.id)
-  );
-
-  if (intent === undefined) {
-    if (!context.built) {
-      return { ...context, stop: notBoarded(snapshot.context, admission) };
-    }
-
-    return { ...context, drained: true };
-  }
 
   const checks =
     intent.kind === "RerunChecks"
@@ -437,11 +486,6 @@ const drain = Effect.fn("Train.drain")(function* drain(context: RunnerContext) {
 
   const next: RunnerContext = {
     ...claimed,
-    built: context.built || intent.kind === "BuildTrain",
-    result:
-      admission.mode === "dry-run" && intent.kind === "BuildTrain"
-        ? "rehearsal complete"
-        : undefined,
     train: updated,
   };
 
@@ -450,36 +494,22 @@ const drain = Effect.fn("Train.drain")(function* drain(context: RunnerContext) {
   return next;
 });
 
-const recoverLedger = Effect.fn("Train.recoverLedger")(function* recoverLedger(
-  context: RunnerContext,
-  message: string
-) {
-  const store = yield* TrainStore;
-  const saved = yield* store.load.pipe(Effect.orElseSucceed(() => null));
-
-  return {
-    ...context,
-    seen: saved?.seen ?? context.seen,
-    stop: unavailable(message),
-    writes: saved?.writes ?? context.writes,
-  };
-});
-
 export const drainTrain = Effect.fn("Train.drainSafe")(function* drainTrain(
   context: RunnerContext
 ) {
-  return yield* drain(context).pipe(
-    Effect.catch((error) => recoverLedger(context, error.message))
+  const snapshot =
+    context.train === undefined ? undefined : yield* readTrain(context.train);
+
+  const intent = snapshot?.context.intents.find(
+    (entry) => !context.seen.includes(entry.id)
+  );
+
+  return yield* observe(
+    context,
+    intent === undefined ? Effect.succeed(context) : drain(context, intent),
+    intent?.kind
   );
 });
 
-export const prepareTrain = Effect.fn("Train.prepareSafe")(
-  function* prepareTrain(context: RunnerContext) {
-    return yield* initializeTrain(context).pipe(
-      Effect.orElseSucceed((error) => ({
-        ...context,
-        stop: unavailable(error.message),
-      }))
-    );
-  }
-);
+export const prepareTrain = (context: RunnerContext) =>
+  observe(context, initializeTrain(context));

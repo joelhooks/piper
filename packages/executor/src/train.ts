@@ -10,9 +10,14 @@ import { types } from "xstate";
 
 import { TrainAdmissionSchema } from "./train-domain.js";
 import type { TrainAdmission, TrainStop } from "./train-domain.js";
-import { admissionRefusal } from "./train-policy.js";
+import { admissionRefusal, notBoarded } from "./train-policy.js";
 import { recordTrain } from "./train-store.js";
-import { drainTrain, pollTrain, prepareTrain } from "./train-tasks.js";
+import {
+  boardTrain,
+  drainTrain,
+  pollTrain,
+  prepareTrain,
+} from "./train-tasks.js";
 import type { RunnerContext } from "./train-tasks.js";
 
 const preparing = createEffectLogic({
@@ -20,7 +25,12 @@ const preparing = createEffectLogic({
   schemas: { input: types<RunnerContext>() },
 });
 
-const polling = createEffectLogic({
+const boarding = createEffectLogic({
+  effect: ({ input }) => boardTrain(input),
+  schemas: { input: types<RunnerContext>() },
+});
+
+const riding = createEffectLogic({
   effect: ({ input }) => pollTrain(input),
   schemas: { input: types<RunnerContext>() },
 });
@@ -30,60 +40,126 @@ const draining = createEffectLogic({
   schemas: { input: types<RunnerContext>() },
 });
 
-const destination = (context: RunnerContext) => {
-  if (context.stop !== undefined) {
-    return "stopped";
-  }
-
-  if (context.result === "landed") {
-    return "landed";
-  }
-
-  return context.result === "rehearsal complete" ? "rehearsed" : undefined;
-};
-
 export const trainRunnerMachine = setupEffect({
-  actors: { draining, polling, preparing },
+  actors: { boarding, draining, preparing, riding },
   schemas: { context: types<RunnerContext>(), input: types<RunnerContext>() },
 }).createMachine({
+  always: ({ context }) =>
+    context.stop === undefined ? undefined : { target: "#runner.stopped" },
   context: ({ input }) => input,
+  id: "runner",
   initial: "preparing",
   states: {
-    draining: {
-      invoke: {
-        input: ({ context }) => context,
-        onDone: ({ event }) => ({
-          context: event.output,
-          reenter: true,
-          target:
-            destination(event.output) ??
-            (event.output.drained ? "polling" : "draining"),
-        }),
-        src: "draining",
+    boarding: {
+      initial: "polling",
+      states: {
+        draining: {
+          invoke: {
+            input: ({ context }) => context,
+            onDone: ({ event }) => {
+              const { context, intent, snapshot } = event.output;
+
+              if (context.stop !== undefined) {
+                return { context, target: "#runner.stopped" };
+              }
+
+              if (intent === "BuildTrain") {
+                return {
+                  context,
+                  target:
+                    context.admission?.mode === "dry-run"
+                      ? "#runner.rehearsed"
+                      : "#runner.riding.draining",
+                };
+              }
+
+              if (
+                intent === undefined &&
+                snapshot !== undefined &&
+                context.admission !== undefined
+              ) {
+                return {
+                  context: {
+                    ...context,
+                    stop: notBoarded(snapshot.context, context.admission),
+                  },
+                  target: "#runner.stopped",
+                };
+              }
+
+              return { context, reenter: true, target: "draining" };
+            },
+            src: "draining",
+          },
+        },
+        polling: {
+          invoke: {
+            input: ({ context }) => context,
+            onDone: ({ event }) => ({
+              context: event.output.context,
+              target:
+                event.output.snapshot?.value === "landed"
+                  ? "#runner.landed"
+                  : "draining",
+            }),
+            src: "boarding",
+          },
+        },
       },
     },
     landed: { type: "final" },
-    polling: {
-      invoke: {
-        input: ({ context }) => context,
-        onDone: ({ event }) => ({
-          context: event.output,
-          target: destination(event.output) ?? "draining",
-        }),
-        src: "polling",
-      },
-    },
     preparing: {
       invoke: {
         input: ({ context }) => context,
-        onDone: ({ event }) => ({
-          context: event.output,
-          target: destination(event.output) ?? "polling",
-        }),
+        onDone: ({ event }) => {
+          const { context, snapshot } = event.output;
+
+          if (snapshot?.context.head !== undefined) {
+            return { context, target: "riding.draining" };
+          }
+
+          return {
+            context,
+            target:
+              snapshot?.context.build === undefined
+                ? "boarding.polling"
+                : "boarding.draining",
+          };
+        },
         src: "preparing",
       },
     },
     rehearsed: { type: "final" },
+    riding: {
+      initial: "draining",
+      states: {
+        draining: {
+          invoke: {
+            input: ({ context }) => context,
+            onDone: ({ event }) => ({
+              context: event.output.context,
+              reenter: true,
+              target:
+                event.output.intent === undefined ? "polling" : "draining",
+            }),
+            src: "draining",
+          },
+        },
+        polling: {
+          invoke: {
+            input: ({ context }) => context,
+            onDone: ({ event }) => ({
+              context: event.output.context,
+              target:
+                event.output.snapshot?.value === "landed"
+                  ? "#runner.landed"
+                  : "draining",
+            }),
+            src: "riding",
+          },
+        },
+      },
+    },
     stopped: { type: "final" },
   },
 });
@@ -96,26 +172,21 @@ export const decodeTrainAdmission = flow(
 export const runTrain = Effect.fn("Executor.runTrain")(function* runTrain(
   decoded: TrainAdmission | TrainStop
 ) {
-  const context: RunnerContext = {
-    admission: "_tag" in decoded ? undefined : decoded,
-    built: false,
-    departed: false,
-    drained: false,
-    result: undefined,
-    seen: [],
-    stop: "_tag" in decoded ? decoded : undefined,
-    train: undefined,
-    writes: 0,
-  };
-
   const actor = yield* createEffectActor(trainRunnerMachine, {
-    input: context,
+    input: {
+      admission: "_tag" in decoded ? undefined : decoded,
+      seen: [],
+      stop: "_tag" in decoded ? decoded : undefined,
+      train: undefined,
+      writes: 0,
+    },
   });
 
   yield* waitFor(actor, (snapshot) => snapshot.status === "done").pipe(
     Effect.orDie
   );
-  const finished = actor.getSnapshot().context;
+  const final = actor.getSnapshot();
+  const finished = final.context;
 
   const snapshot =
     finished.train === undefined ? undefined : yield* readTrain(finished.train);
@@ -133,13 +204,16 @@ export const runTrain = Effect.fn("Executor.runTrain")(function* runTrain(
     });
   }
 
-  const exit = finished.stop?.stop ?? finished.result ?? "runner stopped";
+  const exit =
+    finished.stop?.stop ??
+    (final.value === "landed" ? "landed" : "rehearsal complete");
+
   yield* recordTrain({ exit });
 
   return {
     exit,
     stop: finished.stop,
-    success: finished.result !== undefined,
+    success: final.value !== "stopped",
     writes: finished.writes,
   };
 }, Effect.scoped);

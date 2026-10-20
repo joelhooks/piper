@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import { ConfigProvider, Effect, Layer, Predicate, Schema } from "effect";
 
+import { ExecutorError } from "../src/domain.js";
+import { Recorder } from "../src/recorder.js";
 import type { TrainStop } from "../src/train-domain.js";
 import { TrainRecord } from "../src/train-domain.js";
 import { decodeTrainAdmission, runTrain } from "../src/train.js";
@@ -19,6 +21,34 @@ const refusal = (
 };
 
 describe("admitted train runner", () => {
+  it.effect(
+    "a failed dry build stops instead of reaching the rehearsal final state",
+    () =>
+      Effect.gen(function* failedRehearsal() {
+        const test = yield* fixture();
+
+        const failingRecorder = Layer.succeed(Recorder, {
+          append: () =>
+            Effect.fail(
+              new ExecutorError({
+                code: "storage",
+                message: "synthetic recorder failure",
+              })
+            ),
+        });
+
+        const result = yield* runTrain({ ...admission, mode: "dry-run" }).pipe(
+          Effect.provide(Layer.merge(test.layer, failingRecorder))
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.exit).toBe("BuildTrain failed");
+        expect(result.stop?.harm).toBe(
+          "continuing after an unsuccessful or ambiguous operation"
+        );
+        expect(test.github.writes).toEqual([]);
+      })
+  );
   it.effect(
     "can rehearse a saved read-only build again without hanging or writing",
     () =>
