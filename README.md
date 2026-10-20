@@ -37,10 +37,30 @@ Both machines append intents to an outbox and facts to a ledger. An external exe
 | `packages/core/src/host.ts` | Scoped train creation, restoration, stepping, and inspection |
 | `packages/core/src/solo-host.ts` | Scoped solo creation, restoration, stepping, and inspection |
 | `packages/core/src/vocabulary.ts` | Display vocabulary presets, schema, and pure notification rendering |
+| `packages/core/src/plan.ts` | Plan graph schema, `readyNodes`, `waves`, and `conflictPairs` |
+| `packages/core/src/metrics.ts` | Pure metrics derived from train and solo ledger facts |
+| `packages/core/src/not-red.ts` | `NotRed`, the typed refusal when a solo has no failing check |
+| `packages/core/src/candidate.ts` | `decideCandidate`: classifies the range from the live release to main as unchanged, no change, candidate, schema first, desk fire, or unknown |
+| `packages/core/src/release-domain.ts` | Release input, plan, expectation, intent, event, and fact schemas |
+| `packages/core/src/release-policy.ts` | Pure expectation checker and runway predicate |
+| `packages/core/src/release.ts` | Release lifecycle |
+| `packages/core/src/release-host.ts` | Scoped release creation, restoration, stepping, and inspection |
 
 The host helpers are storage-independent. They restore with `createEffectActor(machine, { snapshot })`, deliver events, and wait for a mailbox barrier before returning a persisted snapshot. Deadlines and poll times live in context. An integration reads the next alarm time and posts a `tick`; there are no process-local timers to restore.
 
 Repository settings are explicit inputs: `trainLabel`, `ignoredChecks`, and `aggregateChecks`. The synthetic examples use `train`, `branch-current`, and `checks`. These names carry no provider-specific policy. A train input may also list `candidateIgnoredChecks`: checks ignored only when deciding whether a car may board. Use it for a gate that is red by design on pull requests and only means something on the train head, such as a full-suite rollup. The train head is still judged on it. `requireUpToDate: false` lets a car board when its branch is behind main. The train branch merges every car onto main, so the train head's CI still judges the combined code. `candidateRequiredChecks` lists groups of check names: a car may board once every check in any one group has succeeded (skipped does not count), even while its other checks still run. A completed failure on any other check that isn't ignored still refuses the car. Without it, every car check must finish green before boarding.
+
+## Packages
+
+| Package | Owns | Run |
+| --- | --- | --- |
+| `packages/core` (`@joelhooks/piper`) | Machines, policy, host helpers, plan graph, metrics, release, candidate decision | `pnpm test` |
+| `packages/worker` (`@joelhooks/piper-worker`) | HTTP host: Durable Objects, SQLite storage, auth, routes, `/metrics`, Alchemy declaration | `pnpm worker:plan` |
+| `packages/executor` (`@joelhooks/piper-executor`) | Drains train, solo and release jobs; admitted train and release drivers; the claim journal. Bin `piper-executor` | `pnpm executor --repo <owner/repo> --api <url>` |
+| `packages/shadow` (`@joelhooks/piper-shadow`) | Dry-run train comparison against an operator trace. Bin `piper-shadow` | `pnpm shadow --repo <owner/repo> --since <time> --replay <dir>` |
+| `packages/observe` (`@joelhooks/piper-observe`) | Release observation checks for a Vercel project with Axiom logs. Bin `piper-observe` | `pnpm observe --config <file> --check <name> [--baseline]` |
+
+Details for each package follow in its section below.
 
 ## Plan graph
 
@@ -328,6 +348,6 @@ The code and API keep plain domain names. The glossary is the default `rat` disp
 
 ## Scope
 
-This first stage contains only core machines, policies, host helpers, tests, and development tooling. Provider executors, Workers, durable storage, authentication, and infrastructure belong in later stages.
+`@joelhooks/piper` core holds machines, policies, and host helpers with no provider I/O. Provider access, durable storage, authentication, and infrastructure live in the `worker`, `executor`, `shadow`, and `observe` packages. Every workspace package is private.
 
 MIT. See [LICENSE](LICENSE).
