@@ -112,11 +112,23 @@ const BaselinedSchema = Schema.Struct({
   outcome: Schema.Literals(["pass", "fail", "unknown"]),
 });
 
-const ObservedSchema = Schema.Struct({
-  outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
-});
+const ObservedSchema = Schema.StructWithRest(
+  Schema.Struct({
+    outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)]
+);
 
-const completed = (posted: readonly PostedReleaseEvent[] = []): Outcome => ({
+export const commandLastLine = (output: string) =>
+  output.trim().split("\n").at(-1) ?? "";
+
+export type ReleaseOutcome = Omit<Outcome, "events"> & {
+  readonly events: readonly PostedReleaseEvent[];
+};
+
+const completed = (
+  posted: readonly PostedReleaseEvent[] = []
+): ReleaseOutcome => ({
   events: posted,
   status: "done",
 });
@@ -199,155 +211,169 @@ const runBaseline = Effect.fn("Executor.release.baseline")(
   }
 );
 
-const runRelease = Effect.fn("Executor.release.run")(function* runRelease(
-  job: Extract<Job, { readonly _tag: "release" }>,
-  settings: Settings
-) {
-  const { intent } = job;
-  const at = yield* Clock.currentTimeMillis;
+const runReleaseIntent = Effect.fn("Executor.release.run")(
+  function* runReleaseIntent(
+    job: Extract<Job, { readonly _tag: "release" }>,
+    settings: Settings
+  ) {
+    const { intent } = job;
+    const at = yield* Clock.currentTimeMillis;
 
-  if (intent.kind === "RequestReview") {
-    if (settings.mode === "dry-run") {
-      return yield* record(job, [
-        {
-          body: { docs: intent.docs, plan: intent.plan, runId: intent.runId },
-          method: "POST",
-          path: "RequestReview",
-        },
-      ]);
-    }
-
-    const reviewer = yield* ReleaseReviewer;
-
-    const submitted = yield* reviewer.submit({
-      docs: intent.docs,
-      plan: intent.plan,
-      runId: intent.runId,
-    });
-
-    return completed(submitted ? [] : [events.reviewUnavailable({ at })]);
-  }
-
-  if (intent.kind === "NotifyOwner") {
-    const args =
-      "check" in intent
-        ? ["--cause", intent.cause, "--check", intent.check]
-        : ["--cause", intent.cause];
-
-    const command = yield* resolve("NotifyOwner", args);
-
-    if (settings.mode === "dry-run") {
-      return yield* record(job, [
-        { body: { args: command.args }, method: "POST", path: command.command },
-      ]);
-    }
-
-    const notifier = yield* ReleaseCommands;
-    yield* notifier.run(command);
-
-    return completed();
-  }
-
-  if (intent.kind === "Baseline") {
-    return yield* runBaseline(job, intent, settings.mode);
-  }
-
-  const keys =
-    intent.kind === "Observe"
-      ? intent.checks.map(({ name: check }) => ({
-          args: ["--check", check],
-          key: `Observe:${check}`,
-        }))
-      : [
+    if (intent.kind === "RequestReview") {
+      if (settings.mode === "dry-run") {
+        return yield* record(job, [
           {
-            args: [
-              "--target",
-              intent.kind === "Restore" ? intent.to : intent.target,
-            ],
-            key: intent.kind,
+            body: { docs: intent.docs, plan: intent.plan, runId: intent.runId },
+            method: "POST",
+            path: "RequestReview",
           },
-        ];
+        ]);
+      }
 
-  const commands: Command[] = [];
+      const reviewer = yield* ReleaseReviewer;
 
-  for (const key of keys) {
-    commands.push(yield* resolve(key.key, key.args));
-  }
+      const submitted = yield* reviewer.submit({
+        docs: intent.docs,
+        plan: intent.plan,
+        runId: intent.runId,
+      });
 
-  if (settings.mode === "dry-run") {
-    return yield* record(
-      job,
-      commands.map((command) => ({
-        body: { args: command.args },
-        method: "POST",
-        path: command.command,
-      }))
-    );
-  }
+      return completed(submitted ? [] : [events.reviewUnavailable({ at })]);
+    }
 
-  const runner = yield* ReleaseCommands;
+    if (intent.kind === "NotifyOwner") {
+      const args =
+        "check" in intent
+          ? ["--cause", intent.cause, "--check", intent.check]
+          : ["--cause", intent.cause];
 
-  if (intent.kind === "Observe") {
-    const observations: PostedReleaseEvent[] = [];
+      const command = yield* resolve("NotifyOwner", args);
 
-    for (const { name: check } of intent.checks) {
-      const { outcome } = yield* Effect.gen(function* observe() {
-        const command = yield* resolve(`Observe:${check}`, ["--check", check]);
-        const now = yield* Clock.currentTimeMillis;
+      if (settings.mode === "dry-run") {
+        return yield* record(job, [
+          {
+            body: { args: command.args },
+            method: "POST",
+            path: command.command,
+          },
+        ]);
+      }
 
-        if (now >= intent.deadlineAt) {
-          return { outcome: "unknown" } satisfies typeof ObservedSchema.Type;
-        }
+      const notifier = yield* ReleaseCommands;
+      yield* notifier.run(command);
 
-        const output = yield* runner
-          .run(command)
-          .pipe(Effect.timeout(Math.max(0, intent.deadlineAt - now)));
+      return completed();
+    }
 
-        return yield* decode(Schema.fromJsonString(ObservedSchema))(output);
-      }).pipe(
-        Effect.catch(() =>
-          Effect.succeed<typeof ObservedSchema.Type>({ outcome: "unknown" })
-        )
+    if (intent.kind === "Baseline") {
+      return yield* runBaseline(job, intent, settings.mode);
+    }
+
+    const keys =
+      intent.kind === "Observe"
+        ? intent.checks.map(({ name: check }) => ({
+            args: ["--check", check],
+            key: `Observe:${check}`,
+          }))
+        : [
+            {
+              args: [
+                "--target",
+                intent.kind === "Restore" ? intent.to : intent.target,
+              ],
+              key: intent.kind,
+            },
+          ];
+
+    const commands: Command[] = [];
+
+    for (const key of keys) {
+      commands.push(yield* resolve(key.key, key.args));
+    }
+
+    if (settings.mode === "dry-run") {
+      return yield* record(
+        job,
+        commands.map((command) => ({
+          body: { args: command.args },
+          method: "POST",
+          path: command.command,
+        }))
       );
-
-      const observedAt = yield* Clock.currentTimeMillis;
-
-      observations.push(events.observed({ at: observedAt, check, outcome }));
     }
 
-    return completed(observations);
+    const runner = yield* ReleaseCommands;
+
+    if (intent.kind === "Observe") {
+      const observations: PostedReleaseEvent[] = [];
+
+      for (const { name: check } of intent.checks) {
+        const { outcome, ...detail } = yield* Effect.gen(function* observe() {
+          const command = yield* resolve(`Observe:${check}`, [
+            "--check",
+            check,
+          ]);
+
+          const now = yield* Clock.currentTimeMillis;
+
+          if (now >= intent.deadlineAt) {
+            return { outcome: "unknown" } satisfies typeof ObservedSchema.Type;
+          }
+
+          const output = yield* runner
+            .run(command)
+            .pipe(Effect.timeout(Math.max(0, intent.deadlineAt - now)));
+
+          return yield* decode(Schema.fromJsonString(ObservedSchema))(
+            commandLastLine(output)
+          );
+        }).pipe(
+          Effect.catch(() =>
+            Effect.succeed<typeof ObservedSchema.Type>({ outcome: "unknown" })
+          )
+        );
+
+        const observedAt = yield* Clock.currentTimeMillis;
+
+        observations.push(
+          events.observed({ at: observedAt, check, detail, outcome })
+        );
+      }
+
+      return completed(observations);
+    }
+
+    const outputs: string[] = [];
+
+    for (const command of commands) {
+      outputs.push(yield* runner.run(command));
+    }
+
+    const finishedAt = yield* Clock.currentTimeMillis;
+
+    switch (intent.kind) {
+      case "PlanRelease": {
+        const rows = yield* decode(Schema.fromJsonString(ReleasePlanSchema))(
+          outputs[0]
+        );
+
+        return completed([events.planned({ at: finishedAt, rows })]);
+      }
+
+      case "Deploy": {
+        return completed([events.deployed({ at: finishedAt })]);
+      }
+
+      case "Restore": {
+        return completed([events.restored({ at: finishedAt })]);
+      }
+
+      default: {
+        return yield* Effect.die(intent satisfies never);
+      }
+    }
   }
-
-  const outputs: string[] = [];
-
-  for (const command of commands) {
-    outputs.push(yield* runner.run(command));
-  }
-
-  const finishedAt = yield* Clock.currentTimeMillis;
-
-  switch (intent.kind) {
-    case "PlanRelease": {
-      const rows = yield* decode(Schema.fromJsonString(ReleasePlanSchema))(
-        outputs[0]
-      );
-
-      return completed([events.planned({ at: finishedAt, rows })]);
-    }
-
-    case "Deploy": {
-      return completed([events.deployed({ at: finishedAt })]);
-    }
-
-    case "Restore": {
-      return completed([events.restored({ at: finishedAt })]);
-    }
-
-    default: {
-      return yield* Effect.die(intent satisfies never);
-    }
-  }
-});
+);
 
 const failureEvents = (
   intent: ReleaseIntent,
@@ -395,7 +421,7 @@ export const executeRelease = Effect.fn("Executor.release")(
     settings: Settings
   ) {
     return yield* runAdmitted(settings.mode, job.repo, () =>
-      runRelease(job, settings).pipe(
+      runReleaseIntent(job, settings).pipe(
         Effect.catch((error) =>
           Effect.gen(function* failed() {
             const at = yield* Clock.currentTimeMillis;
@@ -413,7 +439,7 @@ export const executeRelease = Effect.fn("Executor.release")(
       )
     ).pipe(
       Effect.catch((error) =>
-        Effect.succeed<Outcome>({ error, events: [], status: "failed" })
+        Effect.succeed<ReleaseOutcome>({ error, events: [], status: "failed" })
       )
     );
   }

@@ -149,7 +149,10 @@ export const PostedReleaseEventSchema = Schema.Union([
   Schema.TaggedStruct("window", ReleaseEvents.window.fields),
   Schema.TaggedStruct("fire", ReleaseEvents.fire.fields),
   Schema.TaggedStruct("deployed", ReleaseEvents.deployed.fields),
-  Schema.TaggedStruct("observed", ReleaseEvents.observed.fields),
+  Schema.TaggedStruct("observed", {
+    ...ReleaseEvents.observed.fields,
+    detail: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
   Schema.TaggedStruct("tick", ReleaseEvents.tick.fields),
   Schema.TaggedStruct("restored", ReleaseEvents.restored.fields),
   Schema.TaggedStruct("failed", ReleaseEvents.failed.fields),

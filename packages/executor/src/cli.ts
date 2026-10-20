@@ -9,6 +9,7 @@ import { runOnce } from "./drain.js";
 import { Judge } from "./execute.js";
 import { GitHub } from "./github.js";
 import { Journal, recorderLayer } from "./journal.js";
+import { releaseCli } from "./release-cli.js";
 import {
   ReleaseCommandConfig,
   ReleaseCommandsSchema,
@@ -118,7 +119,7 @@ const command = Command.make(
 
 NodeRuntime.runMain(
   command.pipe(
-    Command.withSubcommands([trainCommand]),
+    Command.withSubcommands([trainCommand, releaseCli]),
     Command.run({ version: "0.2.0" }),
     Effect.provide(NodeServices.layer)
   )

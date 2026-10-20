@@ -1,0 +1,989 @@
+import { fileURLToPath } from "node:url";
+
+import {
+  NodeCrypto,
+  NodeFileSystem,
+  NodeServices,
+} from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { createEffectActor, snapshots } from "@xstate/effect";
+import {
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Predicate,
+  Queue,
+  Schema,
+  Stream,
+} from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { TestClock } from "effect/testing";
+
+import { releaseInput } from "../../core/test/release-fixtures.js";
+import { ExecutorError } from "../src/domain.js";
+import { Recorder } from "../src/recorder.js";
+import { releaseCheckMachine } from "../src/release-check.js";
+import { RunLogLineSchema } from "../src/release-run-domain.js";
+import type { ReleaseConfig, VerdictRow } from "../src/release-run-domain.js";
+import { runLines } from "../src/release-run-log.js";
+import {
+  MessageSink,
+  ReadyStore,
+  RunLog,
+  VerdictSink,
+  printOnlyReleaseLayer,
+  releaseMemoryStore,
+  releaseSinkLayer,
+  releaseFileStore,
+  liveFireSinks,
+  makeVerdictMemory,
+} from "../src/release-run-services.js";
+import { releaseDriverMachine, runRelease } from "../src/release-run.js";
+import type { ReleaseRunOptions } from "../src/release-run.js";
+import { ReleaseCommands, ReleaseCommandConfig } from "../src/release.js";
+import type { ReleaseCommandSchema } from "../src/release.js";
+
+const config: ReleaseConfig = {
+  commands: {
+    Deploy: { args: [], command: "deploy" },
+    MessageOwner: { args: [], command: "message" },
+    NotifyOwner: { args: [], command: "notify" },
+    "Observe:availability": { args: [], command: "availability" },
+    "Observe:integrity": { args: [], command: "integrity" },
+    PageOwner: { args: [], command: "page" },
+    PlanRelease: { args: [], command: "plan" },
+    Restore: { args: [], command: "restore" },
+  },
+  input: {
+    ...releaseInput,
+    checks: [
+      { everyMs: 10, name: "availability", onFail: "restore", timeoutMs: 100 },
+      { everyMs: 30, name: "integrity", onFail: "escalate", timeoutMs: 100 },
+    ],
+    minimumRunwayMs: 1,
+    observationTimeoutMs: 100,
+  },
+  name: "synthetic-release",
+  predecessor: "accepted",
+  preflight: { args: [], command: "preflight" },
+  repo: "sample/project",
+  rowPrefix: "synthetic: ",
+};
+
+const options: ReleaseRunOptions = {
+  action: "fire",
+  admission: {
+    by: "operator",
+    override: false,
+    verdict: "approve",
+    words: "I approve this code-only plan.",
+  },
+  admittedRepo: "sample/project",
+  mode: "live",
+};
+
+const rows = [{ action: "update", id: "resource-a", kind: "resource" }];
+
+const harness = Effect.gen(function* harness() {
+  const store = yield* releaseMemoryStore;
+  const messages: string[] = [];
+  const pages: string[] = [];
+  const verdicts: VerdictRow[] = [];
+  const calls: string[] = [];
+  const observed = yield* Queue.unbounded<string>();
+
+  const controls = {
+    drift: false,
+    failNotify: false,
+    failPreflight: false,
+    invalidPlan: false,
+    outcome: "pass",
+    planCrash: false,
+    slow: false,
+  };
+
+  const runner = Layer.succeed(ReleaseCommands, {
+    run: Effect.fn("TestRelease.run")(function* run(
+      command: typeof ReleaseCommandSchema.Type
+    ) {
+      calls.push(command.command);
+
+      if (
+        (command.command === "preflight" && controls.failPreflight) ||
+        (command.command === "notify" && controls.failNotify) ||
+        (command.command === "plan" && controls.planCrash)
+      ) {
+        return yield* new ExecutorError({
+          code: "provider",
+          message: "synthetic command failure",
+        });
+      }
+
+      if (command.command === "plan") {
+        if (
+          controls.drift &&
+          calls.filter((call) => call === "plan").length >= 3
+        ) {
+          return JSON.stringify([
+            ...rows,
+            { action: "update", id: "resource-b", kind: "resource" },
+          ]);
+        }
+
+        return JSON.stringify(
+          controls.invalidPlan
+            ? [{ action: "delete", id: "resource-a", kind: "resource" }]
+            : rows
+        );
+      }
+
+      if (
+        command.command === "availability" ||
+        command.command === "integrity"
+      ) {
+        if (command.args.includes("--baseline")) {
+          return JSON.stringify({ outcome: "pass" });
+        }
+
+        if (controls.slow && command.command === "integrity") {
+          return yield* Effect.never;
+        }
+
+        return `diagnostic line\n${JSON.stringify({ evidence: `${command.command}-evidence`, outcome: controls.outcome })}\n`;
+      }
+
+      return "OK";
+    }),
+  });
+
+  const sinks = Layer.mergeAll(
+    Layer.succeed(MessageSink, {
+      page: (message) =>
+        Effect.sync(() => {
+          pages.push(message);
+        }),
+      send: (message) =>
+        Effect.sync(() => {
+          messages.push(message);
+        }).pipe(Effect.andThen(Queue.offer(observed, message)), Effect.asVoid),
+    }),
+    Layer.succeed(VerdictSink, {
+      write: (row) =>
+        Effect.sync(() => {
+          verdicts.push(row);
+        }),
+    }),
+    Layer.succeed(Recorder, { append: () => Effect.void })
+  );
+
+  const layer = Layer.mergeAll(
+    store,
+    runner,
+    sinks,
+    NodeCrypto.layer,
+    ConfigProvider.layer(
+      ConfigProvider.fromUnknown({ PIPER_LIVE_ADMITTED_REPO: config.repo })
+    )
+  );
+
+  return { calls, controls, layer, messages, observed, pages, verdicts };
+});
+
+const ready = (value = config) =>
+  runRelease(value, { ...options, action: "ready" });
+
+const fire = Effect.fn("TestRelease.fire")(function* fire(
+  test: Effect.Success<typeof harness>,
+  value: ReleaseConfig = config,
+  runOptions: ReleaseRunOptions = options
+) {
+  yield* ready(value);
+  const fiber = yield* runRelease(value, runOptions).pipe(Effect.forkScoped);
+  yield* Queue.take(test.observed).pipe(
+    Effect.repeat({ until: (line) => line.endsWith(": observing") })
+  );
+  yield* TestClock.adjust(100);
+
+  return yield* Fiber.join(fiber);
+});
+
+describe("release host", () => {
+  it.effect("CLI ready and dry fire cannot execute configured live sinks", () =>
+    Effect.gen(function* cliDryRun() {
+      const fs = yield* FileSystem.FileSystem;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+      const directory = yield* fs.makeTempDirectoryScoped({
+        prefix: "piper-release-cli-",
+      });
+
+      const marker = `${directory}/live-sink-called`;
+
+      const forbidden = {
+        args: [
+          "-e",
+          `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "called")`,
+          "--",
+        ],
+        command: process.execPath,
+      };
+
+      const input: ReleaseConfig = {
+        ...config,
+        commands: {
+          ...config.commands,
+          Deploy: forbidden,
+          MessageOwner: forbidden,
+          NotifyOwner: forbidden,
+          PageOwner: forbidden,
+          PlanRelease: {
+            args: [
+              "-e",
+              `process.stdout.write(${JSON.stringify(JSON.stringify(rows))})`,
+              "--",
+            ],
+            command: process.execPath,
+          },
+        },
+        preflight: {
+          args: ["-e", "process.exit(0)"],
+          command: process.execPath,
+        },
+      };
+
+      const path = `${directory}/config.json`;
+      const state = `${directory}/state`;
+      const verdicts = `${directory}/verdicts.tsv`;
+      yield* fs.writeFileString(path, JSON.stringify(input));
+
+      const commands = [
+        ["release", "ready", path, "--state", state],
+        [
+          "release",
+          "fire",
+          path,
+          "--state",
+          state,
+          "--verdicts",
+          verdicts,
+          "--mode",
+          "dry-run",
+          "--by",
+          "operator",
+          "--verdict",
+          "approve",
+          "--words",
+          "Synthetic operator approval.",
+        ],
+      ];
+
+      for (const args of commands) {
+        const child = yield* spawner.spawn(
+          ChildProcess.make(
+            fileURLToPath(new URL("../bin/piper-executor", import.meta.url)),
+            args,
+            {
+              env: { PIPER_LIVE_ADMITTED_REPO: config.repo },
+              extendEnv: true,
+              stderr: "pipe",
+              stdin: "ignore",
+            }
+          )
+        );
+
+        const output = yield* Stream.mkString(Stream.decodeText(child.stdout));
+        const errors = yield* Stream.mkString(Stream.decodeText(child.stderr));
+        expect(yield* child.exitCode, `${errors}\n${output}`).toBe(0);
+      }
+
+      expect(yield* fs.exists(`${state}/READY`)).toBe(true);
+      expect(yield* fs.exists(marker)).toBe(false);
+      expect(yield* fs.exists(verdicts)).toBe(false);
+      const log = yield* fs.readFileString(`${state}/run.jsonl`);
+      expect(log).toContain('"_tag":"would-do"');
+      expect(log).not.toContain('"kind":"Deploy"');
+    }).pipe(Effect.provide(NodeServices.layer))
+  );
+
+  it.effect(
+    "accepts, preserves command details and records one verdict per settled check",
+    () =>
+      Effect.gen(function* accepted() {
+        const test = yield* harness;
+        yield* Effect.gen(function* run() {
+          const result = yield* fire(test);
+          expect(result.state).toBe("accepted");
+          expect(test.verdicts.map((row) => row.step).toSorted()).toEqual([
+            "availability",
+            "integrity",
+          ]);
+          expect(test.verdicts[0]?.evidence).toContain("availability-evidence");
+          expect(test.pages).toEqual([]);
+          const log = yield* RunLog;
+          const lines = yield* log.lines;
+          expect(
+            lines.some(
+              (line) =>
+                Predicate.isTagged(line, "admission") &&
+                line.admission.words === options.admission.words
+            )
+          ).toBe(true);
+
+          for (const line of lines) {
+            yield* Schema.encodeEffect(Schema.fromJsonString(RunLogLineSchema))(
+              line
+            );
+          }
+
+          expect(test.messages.at(-1)).toBe("finished: accepted");
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect("holds and pages when the operator holds without override", () =>
+    Effect.gen(function* held() {
+      const test = yield* harness;
+      yield* Effect.gen(function* run() {
+        yield* ready();
+
+        const result = yield* runRelease(config, {
+          ...options,
+          admission: { ...options.admission, verdict: "hold" },
+        });
+
+        expect(result.state).toBe("held");
+        expect(test.pages).toHaveLength(1);
+        expect(test.calls).not.toContain("deploy");
+      }).pipe(Effect.provide(test.layer));
+    })
+  );
+
+  it.effect(
+    "expires unknown checks at the deadline, pages and writes no unknown verdict",
+    () =>
+      Effect.gen(function* expired() {
+        const test = yield* harness;
+        test.controls.outcome = "unknown";
+        yield* Effect.gen(function* run() {
+          const result = yield* fire(test);
+          expect(result.state).toBe("escalated");
+          expect(test.pages).toHaveLength(1);
+          expect(test.verdicts).toEqual([]);
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect(
+    "a slow check does not delay a fast check's cadence or settlement",
+    () =>
+      Effect.gen(function* cadence() {
+        const test = yield* harness;
+        test.controls.slow = true;
+        yield* Effect.gen(function* run() {
+          yield* ready();
+
+          const fiber = yield* runRelease(config, options).pipe(
+            Effect.forkScoped
+          );
+
+          yield* Queue.take(test.observed).pipe(
+            Effect.repeat({ until: (line) => line.endsWith(": observing") })
+          );
+          yield* TestClock.adjust(20);
+          expect(test.verdicts.map((row) => row.step)).toEqual([
+            "availability",
+          ]);
+          yield* TestClock.adjust(80);
+          expect((yield* Fiber.join(fiber)).state).toBe("escalated");
+          expect(
+            test.calls.filter((call) => call === "availability")
+          ).toHaveLength(2);
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect("a failed NotifyOwner is logged and never stops finishing", () =>
+    Effect.gen(function* notifyFailure() {
+      const test = yield* harness;
+      test.controls.outcome = "unknown";
+      test.controls.failNotify = true;
+      yield* Effect.gen(function* run() {
+        expect((yield* fire(test)).state).toBe("escalated");
+        expect(test.pages).toHaveLength(1);
+        const log = yield* RunLog;
+        expect(
+          (yield* log.lines).some(
+            (line) =>
+              Predicate.isTagged(line, "outcome") &&
+              line.outcome.status === "failed"
+          )
+        ).toBe(true);
+      }).pipe(Effect.provide(test.layer));
+    })
+  );
+
+  it.effect(
+    "refuses resume after any deploy attempt, including a claimed attempt without outcome",
+    () =>
+      Effect.gen(function* noResume() {
+        const test = yield* harness;
+        yield* Effect.gen(function* run() {
+          yield* ready();
+          const log = yield* RunLog;
+          yield* log.append(
+            runLines.intent({
+              intent: {
+                at: 0,
+                id: "synthetic/attempt",
+                kind: "Deploy",
+                target: config.input.target,
+              },
+            })
+          );
+
+          const refusal = yield* runRelease(config, {
+            ...options,
+            admission: { ...options.admission, verdict: "hold" },
+          }).pipe(Effect.flip);
+
+          expect(refusal._tag).toBe("DeployAttempted");
+          expect(refusal.harm.length).toBeGreaterThan(0);
+          expect(refusal.next.length).toBeGreaterThan(0);
+          expect(test.calls).not.toContain("deploy");
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect("dry-run and ready wiring cannot reach supplied live sinks", () =>
+    Effect.gen(function* noLiveSinks() {
+      const test = yield* harness;
+      yield* Effect.gen(function* run() {
+        yield* ready();
+
+        const result = yield* runRelease(config, {
+          ...options,
+          mode: "dry-run",
+        });
+
+        expect(result.state).toBe("planned");
+        yield* MessageSink.use((sink) => sink.page("rehearsal page")).pipe(
+          Effect.provide(printOnlyReleaseLayer)
+        );
+        yield* VerdictSink.use((verdict) =>
+          verdict.write({
+            evidence: "rehearsal",
+            outcome: "pass",
+            sha: "synthetic",
+            step: "synthetic",
+            ts: 0,
+          })
+        ).pipe(Effect.provide(printOnlyReleaseLayer));
+        expect(test.pages).toEqual([]);
+        expect(test.verdicts).toEqual([]);
+        expect(test.messages).toEqual([]);
+        expect(test.calls).not.toContain("deploy");
+      }).pipe(Effect.provide(test.layer));
+    })
+  );
+
+  it.effect("refusals carry harm and next for every admission boundary", () =>
+    Effect.gen(function* refusalBoundaries() {
+      const test = yield* harness;
+      yield* Effect.gen(function* run() {
+        const assertRefusal = Effect.fn("TestRelease.assertRefusal")(
+          function* assertRefusal(
+            expected: string,
+            value: ReleaseConfig,
+            runOptions: ReleaseRunOptions
+          ) {
+            const refusal = yield* runRelease(value, runOptions).pipe(
+              Effect.flip
+            );
+
+            expect(refusal._tag).toBe(expected);
+            expect(refusal.harm).not.toBe("");
+            expect(refusal.next).not.toBe("");
+          }
+        );
+
+        yield* assertRefusal("Configuration", { ...config, name: "" }, options);
+        yield* assertRefusal("Admission", config, {
+          ...options,
+          admission: { ...options.admission, words: "" },
+        });
+        yield* assertRefusal("Admission", config, {
+          ...options,
+          admittedRepo: "other/repo",
+        });
+        yield* assertRefusal("Ready", config, options);
+        yield* assertRefusal(
+          "Predecessor",
+          { ...config, predecessor: "held" },
+          { ...options, action: "ready" }
+        );
+        test.controls.invalidPlan = true;
+        yield* assertRefusal("Plan", config, { ...options, action: "ready" });
+        test.controls.invalidPlan = false;
+        test.controls.failPreflight = true;
+        yield* assertRefusal("Preflight", config, {
+          ...options,
+          action: "ready",
+        });
+        test.controls.failPreflight = false;
+        test.controls.planCrash = true;
+        yield* assertRefusal("Execution", config, {
+          ...options,
+          action: "ready",
+        });
+        test.controls.planCrash = false;
+        yield* ready();
+        const store = yield* ReadyStore;
+        const stored = yield* store.read;
+        expect(stored).not.toBeNull();
+        yield* store.write({
+          planHash: "changed",
+          rows,
+          sha: config.input.target,
+        });
+        yield* assertRefusal("Ready", config, options);
+        yield* assertRefusal(
+          "Ready",
+          { ...config, input: { ...config.input, target: "other-sha" } },
+          options
+        );
+      }).pipe(Effect.provide(test.layer));
+    })
+  );
+
+  for (const outcome of ["fail", "breach"]) {
+    it.effect(`records a settled ${outcome} verdict before restoring`, () =>
+      Effect.gen(function* settledFailure() {
+        const test = yield* harness;
+        test.controls.outcome = outcome;
+        yield* Effect.gen(function* run() {
+          expect((yield* fire(test)).state).toBe("restored");
+          expect(test.verdicts).toHaveLength(1);
+          expect(test.verdicts[0]?.outcome).toBe(outcome);
+          expect(test.calls).toContain("restore");
+        }).pipe(Effect.provide(test.layer));
+      })
+    );
+  }
+
+  it.effect(
+    "each check stops at its own deadline while the release deadline remains bounded",
+    () =>
+      Effect.gen(function* checkDeadlines() {
+        const test = yield* harness;
+        test.controls.outcome = "unknown";
+
+        const value: ReleaseConfig = {
+          ...config,
+          input: {
+            ...config.input,
+            checks: [
+              {
+                everyMs: 10,
+                name: "availability",
+                onFail: "restore",
+                timeoutMs: 25,
+              },
+              {
+                everyMs: 30,
+                name: "integrity",
+                onFail: "escalate",
+                timeoutMs: 80,
+              },
+            ],
+          },
+        };
+
+        yield* Effect.gen(function* run() {
+          yield* ready(value);
+
+          const fiber = yield* runRelease(value, options).pipe(
+            Effect.forkScoped
+          );
+
+          yield* Queue.take(test.observed).pipe(
+            Effect.repeat({ until: (line) => line.endsWith(": observing") })
+          );
+          yield* TestClock.adjust(50);
+          expect(
+            test.calls.filter((call) => call === "availability")
+          ).toHaveLength(3);
+          yield* TestClock.adjust(50);
+          expect((yield* Fiber.join(fiber)).state).toBe("escalated");
+          expect(
+            test.calls.filter((call) => call === "availability")
+          ).toHaveLength(3);
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect(
+    "records the operator's override words and every review state change",
+    () =>
+      Effect.gen(function* overrideAdmission() {
+        const test = yield* harness;
+
+        const value: ReleaseConfig = {
+          ...config,
+          input: { ...config.input, overrideBy: "operator" },
+        };
+
+        const admission = {
+          by: "operator",
+          override: true,
+          verdict: "hold",
+          words: "I accept this held review for this release.",
+        } satisfies typeof options.admission;
+
+        yield* Effect.gen(function* run() {
+          expect(
+            (yield* fire(test, value, { ...options, admission })).state
+          ).toBe("accepted");
+          const log = yield* RunLog;
+          expect(
+            (yield* log.lines).some(
+              (line) =>
+                Predicate.isTagged(line, "event") &&
+                Predicate.isTagged(line.event, "override") &&
+                line.event.reason === admission.words
+            )
+          ).toBe(true);
+          expect(
+            test.messages.filter((message) => message.endsWith(": armed"))
+          ).toHaveLength(1);
+          expect(
+            test.messages.filter((message) => message.endsWith(": reviewHeld"))
+          ).toHaveLength(1);
+          expect(
+            test.messages.filter((message) => message.endsWith(": fired"))
+          ).toHaveLength(1);
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect(
+    "reaches the declared driver states through real actor execution",
+    () =>
+      Effect.gen(function* reachable() {
+        const test = yield* harness;
+        yield* Effect.gen(function* run() {
+          yield* ready();
+          const gate = yield* Deferred.make<boolean>();
+          const subscribed = yield* Deferred.make<boolean>();
+          const store = yield* ReadyStore;
+
+          const actor = yield* createEffectActor(releaseDriverMachine, {
+            input: { config, options },
+          }).pipe(
+            Effect.provideService(ReadyStore, {
+              read: Deferred.await(gate).pipe(Effect.andThen(store.read)),
+              write: store.write,
+            })
+          );
+
+          const history = yield* snapshots(actor).pipe(
+            Stream.takeUntil((snapshot) => snapshot.status === "done"),
+            Stream.tap((snapshot) =>
+              snapshot.matches("admitting")
+                ? Deferred.succeed(subscribed, true).pipe(Effect.asVoid)
+                : Effect.void
+            ),
+            Stream.map((snapshot) => snapshot.value),
+            Stream.runCollect,
+            Effect.forkScoped
+          );
+
+          yield* Deferred.await(subscribed);
+          yield* Deferred.succeed(gate, true);
+          yield* Queue.take(test.observed).pipe(
+            Effect.repeat({ until: (line) => line.endsWith(": observing") })
+          );
+          yield* TestClock.adjust(100);
+          const reached = yield* Fiber.join(history);
+          expect(
+            reached.filter((value, index) => reached.indexOf(value) === index)
+          ).toEqual([
+            "admitting",
+            "driving",
+            "observing",
+            "finishing",
+            "finished",
+          ]);
+          expect(Object.keys(releaseCheckMachine.states).toSorted()).toEqual([
+            "expired",
+            "sampling",
+            "settled",
+            "waiting",
+          ]);
+        }).pipe(
+          Effect.provideService(ReleaseCommandConfig, config.commands),
+          Effect.provide(test.layer)
+        );
+      })
+  );
+
+  it.effect(
+    "rejects a plan changed between admission and execution before Deploy",
+    () =>
+      Effect.gen(function* drift() {
+        const test = yield* harness;
+        test.controls.drift = true;
+        yield* Effect.gen(function* run() {
+          yield* ready();
+
+          const refusal = yield* runRelease(config, {
+            ...options,
+            admission: { ...options.admission, verdict: "hold" },
+          }).pipe(Effect.flip);
+
+          expect(refusal._tag).toBe("Execution");
+          expect(refusal.harm).toContain("Plan changed");
+          expect(refusal.next).not.toBe("");
+          expect(test.calls).not.toContain("deploy");
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect("refuses unreadable storage with harm and next", () =>
+    Effect.gen(function* storage() {
+      const test = yield* harness;
+
+      const broken = Layer.succeed(ReadyStore, {
+        read: Effect.fail(
+          new ExecutorError({
+            code: "storage",
+            message: "synthetic storage failure",
+          })
+        ),
+        write: () => Effect.void,
+      });
+
+      const refusal = yield* runRelease(config, options).pipe(
+        Effect.provide(Layer.mergeAll(test.layer, broken)),
+        Effect.flip
+      );
+
+      expect(refusal._tag).toBe("Storage");
+      expect(refusal.harm).not.toBe("");
+      expect(refusal.next).not.toBe("");
+    })
+  );
+
+  it.effect("stops a non-notification intent that fails without events", () =>
+    Effect.gen(function* noEvents() {
+      const test = yield* harness;
+      yield* Effect.gen(function* run() {
+        yield* ready();
+
+        const mismatch = ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ PIPER_LIVE_ADMITTED_REPO: "other/repo" })
+        );
+
+        const refusal = yield* runRelease(config, options).pipe(
+          Effect.provide(mismatch),
+          Effect.flip
+        );
+
+        expect(refusal._tag).toBe("Execution");
+        expect(refusal.harm).toContain("requires PIPER_LIVE_ADMITTED_REPO");
+        expect(test.calls).not.toContain("deploy");
+        expect(test.messages.at(-1)).toBe("finished: planned");
+      }).pipe(Effect.provide(test.layer));
+    })
+  );
+
+  it.effect(
+    "keeps observer storage failures typed instead of hiding them until the deadline",
+    () =>
+      Effect.gen(function* observerFailure() {
+        const test = yield* harness;
+
+        const broken = Layer.succeed(VerdictSink, {
+          write: () =>
+            Effect.fail(
+              new ExecutorError({
+                code: "storage",
+                message: "synthetic verdict storage failure",
+              })
+            ),
+        });
+
+        const refusal = yield* fire(test).pipe(
+          Effect.provide(Layer.mergeAll(test.layer, broken)),
+          Effect.flip
+        );
+
+        expect(refusal._tag).toBe("Execution");
+        expect(refusal.harm).toBe("synthetic verdict storage failure");
+        expect(refusal.next).not.toBe("");
+      })
+  );
+
+  it.effect("constructs no live sinks for dry fire or manual ready", () =>
+    Effect.gen(function* construction() {
+      const built: string[] = [];
+
+      const live = () => {
+        built.push("live");
+
+        return printOnlyReleaseLayer;
+      };
+
+      for (const layer of [
+        releaseSinkLayer("fire", "dry-run", live),
+        releaseSinkLayer("ready", "live", live),
+      ]) {
+        yield* MessageSink.use((sink) => sink.page("print only")).pipe(
+          Effect.provide(layer)
+        );
+      }
+
+      expect(built).toEqual([]);
+    })
+  );
+
+  it.effect(
+    "live messages log what was said, when, and whether it woke the operator",
+    () =>
+      Effect.gen(function* messageReceipts() {
+        const fs = yield* FileSystem.FileSystem;
+
+        const directory = yield* fs.makeTempDirectoryScoped({
+          prefix: "piper-message-test-",
+        });
+
+        const store = yield* releaseMemoryStore;
+        const sent: string[] = [];
+        const control = { fail: false };
+
+        const commands = Layer.succeed(ReleaseCommands, {
+          run: Effect.fn("TestMessage.run")(function* run(
+            command: typeof ReleaseCommandSchema.Type
+          ) {
+            if (control.fail) {
+              return yield* new ExecutorError({
+                code: "provider",
+                message: "synthetic message failure",
+              });
+            }
+
+            sent.push(command.args.at(-1) ?? "");
+
+            return "sent";
+          }),
+        });
+
+        const layer = liveFireSinks(config, `${directory}/verdicts.tsv`).pipe(
+          Layer.provide(Layer.mergeAll(store, commands))
+        );
+
+        yield* Effect.gen(function* sendMessages() {
+          const sink = yield* MessageSink;
+          yield* sink.send("state message");
+          yield* sink.page("held page");
+          yield* TestClock.adjust(7);
+          control.fail = true;
+          const failure = yield* sink.page("failed page").pipe(Effect.flip);
+          expect(failure.code).toBe("provider");
+        }).pipe(Effect.provide(layer));
+
+        const lines = yield* RunLog.use((log) => log.lines).pipe(
+          Effect.provide(store)
+        );
+
+        expect(sent).toEqual(["state message", "held page"]);
+        expect(
+          lines.filter((line) => Predicate.isTagged(line, "said"))
+        ).toEqual([
+          runLines.said({ at: 0, said: "state message", wake: false }),
+          runLines.said({ at: 0, said: "held page", wake: true }),
+        ]);
+        expect(
+          lines.find((line) => Predicate.isTagged(line, "message-failed"))
+        ).toMatchObject({
+          at: 7,
+          error: { code: "provider", message: "synthetic message failure" },
+          said: "failed page",
+          wake: true,
+        });
+      }).pipe(Effect.provide(NodeFileSystem.layer))
+  );
+
+  it.effect(
+    "memory and file verdict layers dedupe settled rows across reopen",
+    () =>
+      Effect.gen(function* verdictLayers() {
+        const fs = yield* FileSystem.FileSystem;
+
+        const directory = yield* fs.makeTempDirectoryScoped({
+          prefix: "piper-release-test-",
+        });
+
+        const row: VerdictRow = {
+          evidence: "synthetic evidence",
+          outcome: "pass",
+          sha: "synthetic-sha",
+          step: "synthetic-check",
+          ts: 0,
+        };
+
+        const memory = yield* makeVerdictMemory;
+        const logStore = yield* releaseMemoryStore;
+
+        const twice = VerdictSink.use((sink) =>
+          sink.write(row).pipe(Effect.andThen(sink.write(row)))
+        );
+
+        yield* twice.pipe(Effect.provide(memory.layer));
+        expect(yield* memory.rows).toEqual([row]);
+        const path = `${directory}/verdicts.tsv`;
+
+        const commandLayer = Layer.succeed(ReleaseCommands, {
+          run: () => Effect.die("Verdict test reached a message command"),
+        });
+
+        for (const attempt of [1, 2]) {
+          expect(attempt).toBeGreaterThan(0);
+          yield* twice.pipe(
+            Effect.provide(
+              liveFireSinks(config, path).pipe(
+                Layer.provide(Layer.mergeAll(commandLayer, logStore))
+              )
+            ),
+            Effect.scoped
+          );
+        }
+
+        expect(yield* fs.readFileString(path)).toBe(
+          "0\tsynthetic-sha\tsynthetic-check\tpass\tsynthetic: synthetic evidence\n"
+        );
+        const state = `${directory}/state`;
+        yield* RunLog.use((log) =>
+          log.append(
+            runLines.intent({
+              intent: {
+                at: 0,
+                id: "synthetic/1",
+                kind: "Deploy",
+                target: config.input.target,
+              },
+            })
+          )
+        ).pipe(Effect.provide(releaseFileStore(state)), Effect.scoped);
+
+        const lines = yield* RunLog.use((log) => log.lines).pipe(
+          Effect.provide(releaseFileStore(state)),
+          Effect.scoped
+        );
+
+        expect(lines).toHaveLength(1);
+      }).pipe(Effect.provide(NodeFileSystem.layer))
+  );
+});
