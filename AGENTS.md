@@ -26,7 +26,7 @@ For the uncomplect lens:
 - `pnpm test`: run the fixture and property suites.
 - `pnpm fix`: intentionally apply lint and formatting changes; inspect the diff afterwards.
 
-Node 24, pnpm 11.3.0, Effect 4.0.0, XState 6.0.0-alpha.66, `@xstate/effect` 0.1.0-alpha.7, TypeScript 7.0.2 with `@effect/tsgo` 0.51.1, and Vitest 5.0.3 are the stack contract. Do not migrate runtimes or relax pins as a side effect.
+Node 24, pnpm 11.3.0, Effect 4.0.0, XState 6.0.0-alpha.70, `@xstate/effect` 1.0.0-alpha.9, TypeScript 7.0.2 with `@effect/tsgo` 0.51.1, and Vitest 5.0.3 are the stack contract. Do not migrate runtimes or relax pins as a side effect.
 
 ## Boundaries
 
