@@ -1,27 +1,50 @@
 import type { CheckRun, Intent } from "@joelhooks/piper/domain";
 import { isFailed, isInfra, latestRuns } from "@joelhooks/piper/policy";
 import type { TrainContext } from "@joelhooks/piper/train";
-import { Data } from "effect";
+import { Data, Predicate, SchemaIssue } from "effect";
 import type { Schema } from "effect";
 
 import type { TrainAdmission, TrainStop } from "./train-domain.js";
 
 export const stops = Data.taggedEnum<TrainStop>();
 
+const issueFormatter = SchemaIssue.makeFormatterStandardSchemaV1();
+
+const failingPaths = (cause: Schema.SchemaError) =>
+  [
+    ...new Set(
+      issueFormatter(cause.issue).issues.map((issue) =>
+        (issue.path ?? [])
+          .map((segment) =>
+            String(
+              Predicate.hasProperty(segment, "key") ? segment.key : segment
+            )
+          )
+          .join(".")
+      )
+    ),
+  ].toSorted();
+
 export const admissionRefusal = (cause: Schema.SchemaError): TrainStop => {
-  const unnamedBase = cause.message.includes("baseBranch");
+  const paths = failingPaths(cause);
+
+  const unnamedBase = paths.includes("baseBranch");
+
+  const named = paths
+    .map((path) => (path === "" ? "the admission root" : path))
+    .join(", ");
 
   return stops.InvalidAdmission({
     detail: {
       code: "configuration",
-      message: "Admission JSON does not match TrainAdmissionSchema",
+      message: `Admission JSON does not match TrainAdmissionSchema at ${named}`,
     },
     harm: unnamedBase
       ? "building against an unnamed base"
       : "acting on an invalid admission",
     next: unnamedBase
       ? "add baseBranch to the admission"
-      : "correct the admission JSON before starting the train",
+      : `fix ${named} in the admission JSON`,
     stop: "invalid admission",
   });
 };

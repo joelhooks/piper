@@ -165,7 +165,7 @@ export const trainRunnerMachine = setupEffect({
 });
 
 export const decodeTrainAdmission = flow(
-  Schema.decodeUnknownEffect(TrainAdmissionSchema),
+  Schema.decodeUnknownEffect(TrainAdmissionSchema, { errors: "all" }),
   Effect.mapError(admissionRefusal)
 );
 

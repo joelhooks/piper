@@ -191,4 +191,24 @@ describe("admitted train runner", () => {
       expect(Predicate.isTagged(result, "InvalidAdmission")).toBe(true);
     })
   );
+
+  it.effect("names the failing admission paths without their values", () =>
+    Effect.gen(function* namedPaths() {
+      const { repo: _repo, ...input } = admission.input;
+
+      const result = yield* decodeTrainAdmission({
+        ...admission,
+        goBy: 424_242,
+        input,
+      }).pipe(Effect.flip);
+
+      refusal(
+        result,
+        "InvalidAdmission",
+        "acting on an invalid admission",
+        "fix goBy, input.repo in the admission JSON"
+      );
+      expect(JSON.stringify(result)).not.toContain("424242");
+    })
+  );
 });
