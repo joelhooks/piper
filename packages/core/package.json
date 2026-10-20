@@ -26,8 +26,8 @@
     "./release-host": "./src/release-host.ts"
   },
   "dependencies": {
-    "@xstate/effect": "0.1.0-alpha.7",
+    "@xstate/effect": "1.0.0-alpha.9",
     "effect": "4.0.0",
-    "xstate": "6.0.0-alpha.66"
+    "xstate": "6.0.0-alpha.70"
   }
 }

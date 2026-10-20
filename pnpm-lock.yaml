@@ -26,8 +26,8 @@ importers:
         specifier: 24.13.6
         version: 24.13.6
       '@xstate/effect':
-        specifier: 0.1.0-alpha.7
-        version: 0.1.0-alpha.7(effect@4.0.0)(xstate@6.0.0-alpha.66)
+        specifier: 1.0.0-alpha.9
+        version: 1.0.0-alpha.9(effect@4.0.0)(xstate@6.0.0-alpha.70)
       effect:
         specifier: 4.0.0
         version: 4.0.0
@@ -53,20 +53,20 @@ importers:
         specifier: 5.0.3
         version: 5.0.3(@types/node@24.13.6)(vite@8.3.4(@types/node@24.13.6)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
       xstate:
-        specifier: 6.0.0-alpha.66
-        version: 6.0.0-alpha.66
+        specifier: 6.0.0-alpha.70
+        version: 6.0.0-alpha.70
 
   packages/core:
     dependencies:
       '@xstate/effect':
-        specifier: 0.1.0-alpha.7
-        version: 0.1.0-alpha.7(effect@4.0.0)(xstate@6.0.0-alpha.66)
+        specifier: 1.0.0-alpha.9
+        version: 1.0.0-alpha.9(effect@4.0.0)(xstate@6.0.0-alpha.70)
       effect:
         specifier: 4.0.0
         version: 4.0.0
       xstate:
-        specifier: 6.0.0-alpha.66
-        version: 6.0.0-alpha.66
+        specifier: 6.0.0-alpha.70
+        version: 6.0.0-alpha.70
 
   packages/executor:
     dependencies:
@@ -77,8 +77,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@xstate/effect':
-        specifier: 0.1.0-alpha.7
-        version: 0.1.0-alpha.7(effect@4.0.0)(xstate@6.0.0-alpha.66)
+        specifier: 1.0.0-alpha.9
+        version: 1.0.0-alpha.9(effect@4.0.0)(xstate@6.0.0-alpha.70)
       effect:
         specifier: 4.0.0
         version: 4.0.0
@@ -86,8 +86,8 @@ importers:
         specifier: 4.23.15
         version: 4.23.15
       xstate:
-        specifier: 6.0.0-alpha.66
-        version: 6.0.0-alpha.66
+        specifier: 6.0.0-alpha.70
+        version: 6.0.0-alpha.70
 
   packages/shadow:
     dependencies:
@@ -101,8 +101,8 @@ importers:
         specifier: workspace:*
         version: link:../executor
       '@xstate/effect':
-        specifier: 0.1.0-alpha.7
-        version: 0.1.0-alpha.7(effect@4.0.0)(xstate@6.0.0-alpha.66)
+        specifier: 1.0.0-alpha.9
+        version: 1.0.0-alpha.9(effect@4.0.0)(xstate@6.0.0-alpha.70)
       effect:
         specifier: 4.0.0
         version: 4.0.0
@@ -110,8 +110,8 @@ importers:
         specifier: 4.23.15
         version: 4.23.15
       xstate:
-        specifier: 6.0.0-alpha.66
-        version: 6.0.0-alpha.66
+        specifier: 6.0.0-alpha.70
+        version: 6.0.0-alpha.70
 
   packages/worker:
     dependencies:
@@ -1611,11 +1611,11 @@ packages:
   '@vitest/spy@5.0.3':
     resolution: {integrity: sha512-XhFysQTB8AZ+P4gMi+Lpo99vg2AZi0qKpaB9yXQl37+CaMEAPO3iH/wGVnSyL5MPERiLezpqTVtrR6UZH5GCXg==}
 
-  '@xstate/effect@0.1.0-alpha.7':
-    resolution: {integrity: sha512-EYHVGzFxFVfQfp14Evqx+qOQKMh7khHVFriolVqUgGXdQEv0hJm/x+O7jSyzWItaT+DA74XsPd2OTvgSbhC+kw==}
+  '@xstate/effect@1.0.0-alpha.9':
+    resolution: {integrity: sha512-/j88zmjdhbHpBx5klhHIH+Tj8CpT+fb5x0syOKaZIFymPDShgOKwRVtCkz+t1KrX5p4qV4XBEQOCSsmqYnfgqg==}
     peerDependencies:
       effect: ^4.0.0
-      xstate: ^6.0.0-alpha.65
+      xstate: ^6.0.0-alpha.70
 
   acorn@8.19.0:
     resolution: {integrity: sha512-oJlA3XiRm7Cyk6qFD2Jn8ak9B7jSy0qy00ADO3+8dpT0LSjFihQYv4C02LFCSYJV3Q37xYwwRy5m+IpIiUzqWw==}
@@ -2534,8 +2534,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  xstate@6.0.0-alpha.66:
-    resolution: {integrity: sha512-SfbhdplVpjX/D+LEWKmHcxLZFvIpIgS0b0ZTAEx/FKouNzEfIfEVQEXC/0t3vcjw0JQ55brbyBMN1uOI1ZDjEQ==}
+  xstate@6.0.0-alpha.70:
+    resolution: {integrity: sha512-TSFfXYaTNz+ylEpguNsu0L5vDy8cjHRXAqpZBKQnJI++Jm61Vb41TAg1HzeEbC+Mnq9XelKs2dQNOizTwcnssQ==}
     hasBin: true
 
   y18n@5.0.8:
@@ -3568,10 +3568,10 @@ snapshots:
 
   '@vitest/spy@5.0.3': {}
 
-  '@xstate/effect@0.1.0-alpha.7(effect@4.0.0)(xstate@6.0.0-alpha.66)':
+  '@xstate/effect@1.0.0-alpha.9(effect@4.0.0)(xstate@6.0.0-alpha.70)':
     dependencies:
       effect: 4.0.0
-      xstate: 6.0.0-alpha.66
+      xstate: 6.0.0-alpha.70
 
   acorn@8.19.0: {}
 
@@ -4445,7 +4445,7 @@ snapshots:
 
   ws@8.22.0: {}
 
-  xstate@6.0.0-alpha.66: {}
+  xstate@6.0.0-alpha.70: {}
 
   y18n@5.0.8: {}
 

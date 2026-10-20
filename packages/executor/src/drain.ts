@@ -1,6 +1,6 @@
 import {
   createEffectActor,
-  fromEffect,
+  createEffectLogic,
   waitFor,
   setupEffect,
 } from "@xstate/effect";
@@ -73,9 +73,9 @@ const taskResult = Effect.match({
   onSuccess: () => null,
 });
 
-const recoverTask = fromEffect(recover().pipe(taskResult));
+const recoverTask = createEffectLogic(recover().pipe(taskResult));
 
-const drainTask = fromEffect({
+const drainTask = createEffectLogic({
   effect: ({ input }) => drain(input).pipe(taskResult),
   schemas: { input: SettingsSchema },
 });

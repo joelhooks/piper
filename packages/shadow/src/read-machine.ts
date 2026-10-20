@@ -1,7 +1,7 @@
 import { ExecutorError } from "@joelhooks/piper-executor/domain";
 import {
   createEffectActor,
-  fromEffect,
+  createEffectLogic,
   setupEffect,
   waitFor,
 } from "@xstate/effect";
@@ -21,13 +21,13 @@ export class ReadAttempt extends Context.Service<
   }
 >()("piper-shadow/ReadAttempt") {}
 
-const requestTask = fromEffect({
+const requestTask = createEffectLogic({
   effect: ({ input }) =>
     ReadAttempt.use((reader) => reader.read(input)).pipe(Effect.result),
   schemas: { input: RequestSchema },
 });
 
-const backoffTask = fromEffect({
+const backoffTask = createEffectLogic({
   effect: ({ input }) => Effect.sleep(input),
   schemas: { input: Schema.Finite },
 });
