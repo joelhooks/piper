@@ -1,3 +1,4 @@
+import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type {
   PostedReleaseEvent,
@@ -679,5 +680,49 @@ describe("release executor command and judgment ports", () => {
           ).toHaveLength(crash ? 0 : 1);
         }
       })
+  );
+
+  it.effect(
+    "a failing command reports its exit code and the tail of its stderr",
+    () =>
+      Effect.gen(function* failingCommand() {
+        const script = [
+          "for i in $(seq 1 30); do echo noise-$i >&2; done",
+          "echo refused: expected one assignment >&2",
+          "exit 3",
+        ].join("; ");
+
+        const error = yield* ReleaseCommands.use((runner) =>
+          runner.run({ args: ["-c", script], command: "sh" })
+        ).pipe(
+          Effect.flip,
+          Effect.provide(
+            releaseCommandsLayer.pipe(Layer.provide(NodeServices.layer))
+          )
+        );
+
+        expect(error.code).toBe("provider");
+        expect(error.message).toContain("code 3");
+        expect(error.message).toContain("refused: expected one assignment");
+        expect(error.message).toContain("noise-30");
+        expect(error.message).not.toContain("noise-9\n");
+        expect(error.message).not.toContain("noise-1:");
+        expect(error.message.length).toBeLessThan(2200);
+      })
+  );
+
+  it.effect("a command that cannot be spawned says so", () =>
+    Effect.gen(function* missingCommand() {
+      const error = yield* ReleaseCommands.use((runner) =>
+        runner.run({ args: [], command: "synthetic-missing-command" })
+      ).pipe(
+        Effect.flip,
+        Effect.provide(
+          releaseCommandsLayer.pipe(Layer.provide(NodeServices.layer))
+        )
+      );
+
+      expect(error.message).toContain("failed to spawn");
+    })
   );
 });

@@ -44,6 +44,38 @@ export const ReleaseCommands = Context.Reference<{
   }),
 });
 
+const STDERR_TAIL_LINES = 20;
+
+const STDERR_TAIL_CHARS = 2000;
+
+type ReleaseFailure = Data.TaggedEnum<{
+  ReleaseExitedNonzero: {
+    readonly command: string;
+    readonly exitCode: number;
+    readonly stderrTail: string;
+  };
+  ReleaseSpawnFailed: { readonly command: string };
+}>;
+
+const failures = Data.taggedEnum<ReleaseFailure>();
+
+export const stderrTail = (text: string) =>
+  text
+    .trimEnd()
+    .split("\n")
+    .slice(-STDERR_TAIL_LINES)
+    .join("\n")
+    .slice(-STDERR_TAIL_CHARS)
+    .trim();
+
+const collectStderr = (
+  stderr: ChildProcessSpawner.ChildProcessHandle["stderr"]
+) =>
+  Stream.runFold(
+    () => "",
+    (kept: string, chunk: string) => (kept + chunk).slice(-STDERR_TAIL_CHARS)
+  )(Stream.decodeText(stderr)).pipe(Effect.map(stderrTail));
+
 export const releaseCommandsLayer = Layer.effect(
   ReleaseCommands,
   Effect.gen(function* releaseCommandsLayer() {
@@ -52,37 +84,65 @@ export const releaseCommandsLayer = Layer.effect(
     return {
       run: Effect.fn("ReleaseCommands.run")(
         function* run(command: Command) {
-          const process = yield* spawner.spawn(
-            ChildProcess.make(command.command, command.args, {
-              shell: false,
-              stderr: "ignore",
-              stdin: "ignore",
-            })
-          );
+          const process = yield* spawner
+            .spawn(
+              ChildProcess.make(command.command, command.args, {
+                shell: false,
+                stderr: "pipe",
+                stdin: "ignore",
+              })
+            )
+            .pipe(
+              Effect.mapError(() =>
+                failures.ReleaseSpawnFailed({ command: command.command })
+              )
+            );
 
-          const output = yield* Stream.mkString(
-            Stream.decodeText(process.stdout)
+          const [output, stderr, code] = yield* Effect.all(
+            [
+              Stream.mkString(Stream.decodeText(process.stdout)),
+              collectStderr(process.stderr),
+              process.exitCode,
+            ],
+            { concurrency: "unbounded" }
+          ).pipe(
+            Effect.mapError(() =>
+              failures.ReleaseSpawnFailed({ command: command.command })
+            )
           );
-
-          const code = yield* process.exitCode;
 
           if (code !== 0) {
-            return yield* new ExecutorError({
-              code: "provider",
-              message: "Release command exited unsuccessfully",
-            });
+            return yield* Effect.fail(
+              failures.ReleaseExitedNonzero({
+                command: command.command,
+                exitCode: code,
+                stderrTail: stderr,
+              })
+            );
           }
 
           return output;
         },
         Effect.scoped,
-        Effect.mapError(
-          () =>
-            new ExecutorError({
-              code: "provider",
-              message: "Release command failed",
-            })
-        )
+        Effect.catchTags({
+          ReleaseExitedNonzero: (failure) =>
+            Effect.fail(
+              new ExecutorError({
+                code: "provider",
+                message:
+                  failure.stderrTail === ""
+                    ? `Release command ${failure.command} exited with code ${failure.exitCode} and printed nothing to stderr`
+                    : `Release command ${failure.command} exited with code ${failure.exitCode}: ${failure.stderrTail}`,
+              })
+            ),
+          ReleaseSpawnFailed: (failure) =>
+            Effect.fail(
+              new ExecutorError({
+                code: "provider",
+                message: `Release command ${failure.command} failed to spawn`,
+              })
+            ),
+        })
       ),
     };
   })
