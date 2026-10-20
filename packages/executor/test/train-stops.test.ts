@@ -309,7 +309,7 @@ describe("train refusals", () => {
     );
   }
 
-  it.effect("refuses non-admitted triage rather than notifying an owner", () =>
+  it.effect("hands back a red train naming its failing checks", () =>
     Effect.gen(function* outside() {
       const test = yield* fixture();
       test.github.controls.trainChecks = [completed("failure", "built-a")];
@@ -320,11 +320,11 @@ describe("train refusals", () => {
 
       refusal(
         result.stop,
-        "OutsideAdmission",
-        "writing outside the reviewed car and train",
-        "hand back; admit a new train for the required action"
+        "RealRed",
+        "landing a car whose train CI failed",
+        "fix the red in the car (unit), then board it again"
       );
-      expect(result.exit).toBe("intent outside admission");
+      expect(result.exit).toBe("real red");
       expect(
         test.github.writes.some((operation) =>
           operation.path.endsWith("/comments")

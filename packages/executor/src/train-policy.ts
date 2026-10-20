@@ -69,6 +69,19 @@ export const admittedIntent = (
     return undefined;
   }
 
+  if (intent.kind === "RankSuspects") {
+    const failing = [...new Set(intent.failing.map((check) => check.name))]
+      .toSorted()
+      .join(", ");
+
+    return stops.RealRed({
+      detail: intent,
+      harm: "landing a car whose train CI failed",
+      next: `fix the red in the car (${failing}), then board it again`,
+      stop: "real red",
+    });
+  }
+
   return stops.OutsideAdmission({
     detail: intent,
     harm: "writing outside the reviewed car and train",

@@ -34,6 +34,7 @@ export const TrainStopSchema = Schema.Union([
   Schema.TaggedStruct("CarMoved", refusal),
   Schema.TaggedStruct("NotBoarded", refusal),
   Schema.TaggedStruct("OutsideAdmission", refusal),
+  Schema.TaggedStruct("RealRed", refusal),
   Schema.TaggedStruct("RerunRefused", refusal),
   Schema.TaggedStruct("ExecutionFailed", refusal),
   Schema.TaggedStruct("MergeRefused", refusal),
