@@ -26,6 +26,18 @@ export default defineConfig({
     },
   ],
   options: { typeAware: true },
+  overrides: [
+    {
+      files: [
+        "**/*.{test,spec,test-d,spec-d}.{ts,tsx,js,jsx,mts,cts,mjs,cjs}",
+        "**/__tests__/**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs}",
+      ],
+      rules: {
+        "no-empty-function": "error",
+        "promise/prefer-await-to-then": "error",
+      },
+    },
+  ],
   rules: {
     "anti-slop-effect/no-manual-effect-error-tag": "error",
     "anti-slop-effect/no-manual-tag-comparison": "error",

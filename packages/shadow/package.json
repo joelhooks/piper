@@ -10,11 +10,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@effect/platform-node": "4.0.0",
+    "@effect/platform-node": "4.0.5",
     "@joelhooks/piper": "workspace:*",
     "@joelhooks/piper-executor": "workspace:*",
     "@xstate/effect": "1.0.0-alpha.9",
-    "effect": "4.0.0",
+    "effect": "4.0.5",
     "tsx": "4.23.15",
     "xstate": "6.0.0-alpha.70"
   }

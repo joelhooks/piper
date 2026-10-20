@@ -11,10 +11,10 @@
   },
   "dependencies": {
     "@joelhooks/piper": "workspace:*",
-    "effect": "4.0.0"
+    "effect": "4.0.5"
   },
   "devDependencies": {
-    "@effect/platform-node": "4.0.0",
+    "@effect/platform-node": "4.0.5",
     "alchemy": "2.0.0-beta.81",
     "rolldown": "1.2.5",
     "tsx": "4.23.15"

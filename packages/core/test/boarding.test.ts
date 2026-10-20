@@ -28,6 +28,14 @@ const candidate: Candidate = {
   upToDate: true,
 };
 
+const checkRun = (
+  name: string,
+  status: "completed" | "in_progress",
+  conclusion: "success" | "failure" | "skipped" | null
+) => ({ conclusion, headSha: head, name, status });
+
+const car = (checks: Candidate["checks"]) => ({ ...candidate, checks });
+
 describe("boarding checks", () => {
   it("lets a car board when only a boarding-ignored check is red", () => {
     expect(
@@ -63,12 +71,6 @@ describe("boarding checks", () => {
   });
 
   it("boards when any required group passes while other checks still run, but never past a finished failure", () => {
-    const run = (
-      name: string,
-      status: "completed" | "in_progress",
-      conclusion: "success" | "failure" | "skipped" | null
-    ) => ({ conclusion, headSha: head, name, status });
-
     const rules = {
       candidateRequiredChecks: [
         ["light suites", "mode"],
@@ -78,16 +80,15 @@ describe("boarding checks", () => {
       trainLabel: "train",
     };
 
-    const car = (checks: Candidate["checks"]) => ({ ...candidate, checks });
-    const mode = run("mode", "completed", "success");
+    const mode = checkRun("mode", "completed", "success");
 
     expect(
       isEligible(
         car([
-          run("light suites", "completed", "success"),
+          checkRun("light suites", "completed", "success"),
           mode,
-          run("side coverage", "in_progress", null),
-          run("advisory", "completed", "failure"),
+          checkRun("side coverage", "in_progress", null),
+          checkRun("advisory", "completed", "failure"),
         ]),
         rules
       )
@@ -95,39 +96,42 @@ describe("boarding checks", () => {
     expect(
       isEligible(
         car([
-          run("light suites", "completed", "skipped"),
-          run("full light", "completed", "success"),
+          checkRun("light suites", "completed", "skipped"),
+          checkRun("full light", "completed", "success"),
           mode,
-          run("side coverage", "in_progress", null),
+          checkRun("side coverage", "in_progress", null),
         ]),
         rules
       )
     ).toBe(true);
     expect(
       isEligible(
-        car([run("light suites", "completed", "skipped"), mode]),
+        car([checkRun("light suites", "completed", "skipped"), mode]),
         rules
       )
     ).toBe(false);
     expect(
       isEligible(
         car([
-          run("light suites", "completed", "success"),
+          checkRun("light suites", "completed", "success"),
           mode,
-          run("side coverage", "completed", "failure"),
+          checkRun("side coverage", "completed", "failure"),
         ]),
         rules
       )
     ).toBe(false);
     expect(
-      isEligible(car([run("light suites", "in_progress", null), mode]), rules)
+      isEligible(
+        car([checkRun("light suites", "in_progress", null), mode]),
+        rules
+      )
     ).toBe(false);
     expect(
       isEligible(
         car([
-          run("light suites", "completed", "success"),
+          checkRun("light suites", "completed", "success"),
           mode,
-          run("side coverage", "in_progress", null),
+          checkRun("side coverage", "in_progress", null),
         ]),
         { ...rules, candidateRequiredChecks: [] }
       )

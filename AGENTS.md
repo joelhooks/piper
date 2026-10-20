@@ -26,7 +26,7 @@ For the uncomplect lens:
 - `pnpm test`: run the fixture and property suites.
 - `pnpm fix`: intentionally apply lint and formatting changes; inspect the diff afterwards.
 
-Node 24, pnpm 11.3.0, Effect 4.0.0, XState 6.0.0-alpha.70, `@xstate/effect` 1.0.0-alpha.9, TypeScript 7.0.2 with `@effect/tsgo` 0.51.1, and Vitest 5.0.3 are the stack contract. Do not migrate runtimes or relax pins as a side effect.
+Node 24, pnpm 11.3.0, Effect 4.0.5, XState 6.0.0-alpha.70, `@xstate/effect` 1.0.0-alpha.9, TypeScript 7.0.2 with `@effect/tsgo` 0.54.0, and Vitest 5.0.5 are the stack contract. Do not migrate runtimes or relax pins as a side effect.
 
 ## Boundaries
 
@@ -43,7 +43,7 @@ Read the installed Effect `AGENTS.md` and the pinned Effect and XState source be
 - Use `@effect/vitest` for Effect tests. Prefer generated properties and model traces over examples.
 - Prove a new invariant test can fail by breaking the invariant temporarily, then restore the code.
 - Lint debt may only shrink. The current baseline is zero directives outside vendored lint rules.
-- Only the test config opts into the exact unstable module `effect/Arbitrary`, following rat-stack's supported child-config contract. Production typechecks separately under the unchanged base diagnostic map. Never allow prefixes or ignore Effect warnings in the compiler exit code.
+- Only test configs opt into the exact unstable module `effect/Arbitrary`. Child configs list exact unstable modules imported in their scope, including the Effect 4.0.5 platform modules and test-only `@effect/vitest`, following rat-stack's supported child-config contract. The worker plan has a separate config for its Node services. Production typechecks separately under the unchanged base diagnostic map. Never allow prefixes, copy severity maps into child configs, or ignore Effect warnings in the compiler exit code.
 - Lefthook runs `pnpm check` and `pnpm test` before every commit. Never bypass it.
 - Claude and Cursor blockers use `scripts/vcs-command-policy.js`. `prepare` links `tools/pi/git-interceptor` into the ignored local Pi extension directory.
 - Changes that weaken lint, diagnostics, hook policy, or the ratchet need explicit owner approval.

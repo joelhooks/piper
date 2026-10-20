@@ -5,6 +5,12 @@
       {
         "name": "@effect/language-service",
         "allowedUnstableApis": [
+          "@effect/platform-node/NodeCrypto",
+          "@effect/platform-node/NodeFileSystem",
+          "@effect/platform-node/NodeServices",
+          "@effect/vitest",
+          "effect/Crypto",
+          "effect/FileSystem",
           "effect/Arbitrary",
           "effect/http/HttpClient",
           "effect/http/HttpClientRequest",

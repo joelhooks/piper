@@ -6,11 +6,19 @@ allowBuilds:
   esbuild: true
   workerd: true
 overrides:
-  "@effect/platform-node-shared": 4.0.0
-  "@effect/sql-d1": 4.0.0
-  "@effect/sql-sqlite-do": 4.0.0
+  "@effect/platform-node-shared": 4.0.5
+  "@effect/sql-d1": 4.0.5
+  "@effect/sql-sqlite-do": 4.0.5
 minimumReleaseAgeExclude:
-  - effect@4.0.0
-  - "@effect/vitest@4.0.0"
+  - effect@4.0.5
+  - "@effect/vitest@4.0.5"
   - xstate@6.0.0-alpha.70
   - "@xstate/effect@1.0.0-alpha.9"
+  - "@effect/tsgo-darwin-arm64@0.54.0"
+  - "@effect/tsgo-darwin-x64@0.54.0"
+  - "@effect/tsgo-linux-arm64@0.54.0"
+  - "@effect/tsgo-linux-arm@0.54.0"
+  - "@effect/tsgo-linux-x64@0.54.0"
+  - "@effect/tsgo-win32-arm64@0.54.0"
+  - "@effect/tsgo-win32-x64@0.54.0"
+  - "@effect/tsgo@0.54.0"
