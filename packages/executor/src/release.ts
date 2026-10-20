@@ -230,9 +230,9 @@ const runRelease = Effect.fn("Executor.release.run")(function* runRelease(
 
   if (intent.kind === "NotifyOwner") {
     const args =
-      intent.cause === "observationExpired"
-        ? ["--cause", intent.cause]
-        : ["--cause", intent.cause, "--check", intent.check];
+      "check" in intent
+        ? ["--cause", intent.cause, "--check", intent.check]
+        : ["--cause", intent.cause];
 
     const command = yield* resolve("NotifyOwner", args);
 

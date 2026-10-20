@@ -302,6 +302,28 @@ describe("release invariants over synthetic plans and traces", () => {
             type: "failed",
           },
         ]);
+        const deployFailed = yield* readRelease(persisted);
+        expect(deployFailed.value).toBe("escalated");
+        expect(
+          deployFailed.context.intents.map((intent) => intent.kind)
+        ).not.toContain("Restore");
+        expect(deployFailed.context.intents.at(-1)).toMatchObject({
+          cause: "deployFailed",
+          kind: "NotifyOwner",
+        });
+        expect(deployFailed.context.facts.at(-1)).toMatchObject({
+          cause: "deployment failed",
+          state: "escalated",
+        });
+        persisted = yield* stepRelease(yield* openRelease(releaseInput), [
+          ...releaseHappy.slice(0, 4),
+          {
+            at: 105,
+            check: "availability",
+            outcome: "breach",
+            type: "observed",
+          },
+        ]);
         expect((yield* readRelease(persisted)).value).toBe("restoring");
         persisted = yield* stepRelease(persisted, [
           {

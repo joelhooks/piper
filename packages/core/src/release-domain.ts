@@ -224,7 +224,7 @@ export const ReleaseIntentSchema = Schema.Union([
   }),
   Schema.Struct({
     ...intentStamp,
-    cause: Schema.Literal("observationExpired"),
+    cause: Schema.Literals(["deployFailed", "observationExpired"]),
     kind: Schema.Literal("NotifyOwner"),
   }),
 ]);

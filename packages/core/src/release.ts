@@ -325,7 +325,15 @@ export const releaseMachine = setupEffect({
             : undefined,
         failed: ({ context, event }) =>
           event.at >= context.lastAt && event.operation === "Deploy"
-            ? restore(context, event.at, event.reason)
+            ? move(
+                emit(context, event.at, {
+                  cause: "deployFailed",
+                  kind: "NotifyOwner",
+                }),
+                "escalated",
+                event.at,
+                event.reason
+              )
             : undefined,
       },
     },

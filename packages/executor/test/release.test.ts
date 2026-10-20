@@ -247,6 +247,7 @@ describe("release executor command and judgment ports", () => {
             check: "integrity",
             kind: "NotifyOwner",
           },
+          { ...stamp, cause: "deployFailed", kind: "NotifyOwner" },
           { ...stamp, cause: "observationExpired", kind: "NotifyOwner" },
         ] satisfies readonly ReleaseIntent[]) {
           for (const settings of [dry, live]) {
@@ -254,9 +255,9 @@ describe("release executor command and judgment ports", () => {
             const calls: unknown[] = [];
 
             const args =
-              intent.cause === "observationExpired"
-                ? ["--cause", intent.cause]
-                : ["--cause", intent.cause, "--check", intent.check];
+              "check" in intent
+                ? ["--cause", intent.cause, "--check", intent.check]
+                : ["--cause", intent.cause];
 
             const result = yield* execute(job(intent), settings).pipe(
               Effect.provide(
