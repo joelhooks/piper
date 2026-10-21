@@ -96,7 +96,7 @@ Plan updates do not change a train already building or testing. They govern sele
 
 Every write requires `Authorization: Bearer <token>`. `API_TOKEN` is a secret binding. Missing or empty bindings, missing headers, and incorrect tokens return 401 before state access. WebCrypto HMAC verification compares token values without a JavaScript string comparison. Durable Objects repeat the auth check at their own boundary. Reads are open unless `REQUIRE_READ_AUTH` is `"true"`; that switch protects discovery and health too.
 
-Train opening accepts `{ train?, maxCars?, pollMs?, ciTimeoutMs? }`. Solo opening accepts `{ pr, head, owner, base, checks, at?, pollMs?, ciTimeoutMs? }`. Event posts accept one tagged event or an array. Missing timestamps default to receipt time. All write bodies pass through Effect schemas before mutation. Candidate posts also open solo triage for failed checks with a recorded base.
+Train opening accepts `{ train?, maxCars?, pollMs?, ciTimeoutMs? }`. Solo opening accepts `{ pr, head, owner, base, checks, at?, pollMs?, ciTimeoutMs? }`. `pollMs` ranges from 10,000 to 120,000 milliseconds and defaults to 90,000. Event posts accept one tagged event or an array. Missing timestamps default to receipt time. All write bodies pass through Effect schemas before mutation. Candidate posts also open solo triage for failed checks with a recorded base.
 
 Bindings default to `REPO="repository"`, `TRAIN_LABEL="train"`, empty comma-separated `IGNORED_CHECKS` and `AGGREGATE_CHECKS`, and the core's `DEFAULT_CARS` for `MAX_CARS` (8). Polling defaults to 90 seconds and CI timeout to one hour. The Worker only records machine intents. An external executor still owns provider calls and idempotent delivery.
 

@@ -30,7 +30,7 @@ The JSON must decode as `TrainAdmissionSchema` from `@joelhooks/piper-executor/t
 }
 ```
 
-`baseBranch` is required. There is no default or fallback. `input` follows core's `TrainInputSchema`, including its optional candidate-check policy. Its repo and train must match the top-level admission. The admitted car is exactly one PR number and reviewed head.
+`baseBranch` is required. There is no default or fallback. `input.pollMs` sets the riding poll interval: at least 10 seconds and at most 2 minutes. `input` follows core's `TrainInputSchema`, including its optional candidate-check policy. Its repo and train must match the top-level admission. The admitted car is exactly one PR number and reviewed head.
 
 The admitted car is alone in its candidate pool, so it boards on push: absent and pending checks do not hold it, and only a completed, failed, non-ignored check on its head refuses it. Set `input.directRequiredChecks` to let it land without a train. That happens when its head contains the base, its own checks are complete and green, and every check in every listed group succeeded.
 

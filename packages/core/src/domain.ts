@@ -109,7 +109,7 @@ export const TrainInputSchema = Schema.Struct({
     Schema.isBetween({ maximum: MAX_CARS, minimum: 1 })
   ),
   pollMs: Schema.Int.check(
-    Schema.isBetween({ maximum: 120_000, minimum: 60_000 })
+    Schema.isBetween({ maximum: 120_000, minimum: 10_000 })
   ),
   repo: Schema.NonEmptyString,
   requireUpToDate: Schema.optionalKey(Schema.Boolean),
@@ -396,7 +396,7 @@ export const SoloInputSchema = Schema.Struct({
   ignoredChecks: Schema.Array(Schema.String),
   owner: Schema.String,
   pollMs: Schema.Int.check(
-    Schema.isBetween({ maximum: 120_000, minimum: 60_000 })
+    Schema.isBetween({ maximum: 120_000, minimum: 10_000 })
   ),
   pr: PrNumber,
   repo: Schema.NonEmptyString,
