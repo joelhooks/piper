@@ -26,6 +26,11 @@ export const admission: TrainAdmission = {
   train: 1,
 };
 
+export const direct = {
+  ...admission,
+  input: { ...admission.input, directRequiredChecks: [["unit"]] },
+} satisfies TrainAdmission;
+
 export const fixture = Effect.fn("TrainTest.fixture")(function* fixture(
   initial: TrainState | null = null
 ) {

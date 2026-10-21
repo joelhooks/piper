@@ -38,6 +38,7 @@ export const TrainStopSchema = Schema.Union([
   Schema.TaggedStruct("RealRed", refusal),
   Schema.TaggedStruct("RerunRefused", refusal),
   Schema.TaggedStruct("ExecutionFailed", refusal),
+  Schema.TaggedStruct("ReadyFailed", refusal),
   Schema.TaggedStruct("MergeRefused", refusal),
   Schema.TaggedStruct("Unavailable", refusal),
   Schema.TaggedStruct("InvalidAdmission", refusal),

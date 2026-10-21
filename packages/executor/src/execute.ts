@@ -56,6 +56,13 @@ const Pull = Schema.Struct({
   number: Schema.Int,
 });
 
+const DraftPull = Schema.Struct({
+  ...Pull.fields,
+  draft: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(true))
+  ),
+});
+
 const Ref = Schema.Struct({ object: ShaResponse });
 
 const ApiCheck = Schema.Struct({
@@ -448,7 +455,7 @@ const executeTrain = Effect.fn("Executor.train")(function* executeTrain(
     }
 
     case "MarkReady": {
-      const pull = yield* decode(Pull)(
+      const pull = yield* decode(DraftPull)(
         yield* github.read(job.repo, `/pulls/${intent.pr}`)
       );
 
@@ -457,6 +464,10 @@ const executeTrain = Effect.fn("Executor.train")(function* executeTrain(
           code: "head-mismatch",
           message: "PR head changed before ready",
         });
+      }
+
+      if (!pull.draft) {
+        return result();
       }
 
       const responses = yield* apply(

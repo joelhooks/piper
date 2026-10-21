@@ -45,6 +45,7 @@ describe("executor intent translation", () => {
       () =>
         Effect.gen(function* mapping() {
           const fixture = fake();
+          fixture.controls.drafts = item.drafts ?? [];
 
           const outcome = yield* execute(item.job, live).pipe(
             Effect.provide(fixture.layer)
@@ -112,6 +113,8 @@ describe("executor intent translation", () => {
           if (item === undefined) {
             throw new Error("generator outside fixture range");
           }
+
+          fixture.controls.drafts = item.drafts ?? [];
 
           const outcome = yield* execute(item.job, dry).pipe(
             Effect.provide(fixture.layer)
@@ -254,6 +257,7 @@ describe("executor intent translation", () => {
       const job = train({ at: 1, id: "train-1/10", kind: "MarkReady", pr: 3 });
 
       const fixture = fake([job]);
+      fixture.controls.drafts = [3];
       fixture.controls.graphqlErrors = true;
 
       const outcome = yield* execute(job, live).pipe(
@@ -269,6 +273,32 @@ describe("executor intent translation", () => {
         status: "failed",
       });
     })
+  );
+
+  it.effect(
+    "mark ready leaves a pull request that is already ready alone",
+    () =>
+      Effect.gen(function* alreadyReady() {
+        const job = train({
+          at: 1,
+          id: "train-1/10",
+          kind: "MarkReady",
+          pr: 3,
+        });
+
+        for (const settings of [live, dry]) {
+          const fixture = fake([job]);
+
+          const outcome = yield* execute(job, settings).pipe(
+            Effect.provide(fixture.layer)
+          );
+
+          expect(outcome).toEqual({ events: [], status: "done" });
+          expect(fixture.reads).toEqual(["/pulls/3"]);
+          expect(fixture.writes).toEqual([]);
+          expect(fixture.records).toEqual([]);
+        }
+      })
   );
 
   it.effect("merge head mismatch posts mergeRefused without a write", () =>

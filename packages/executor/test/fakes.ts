@@ -1,5 +1,5 @@
 import type { CheckRun } from "@joelhooks/piper/domain";
-import { Data, Effect, Layer } from "effect";
+import { Data, Effect, Layer, Schema } from "effect";
 
 import { ExecutorError } from "../src/domain.js";
 import type { Event, Job, WouldDo, Write } from "../src/domain.js";
@@ -97,6 +97,7 @@ export const cases = [
     paths: ["POST /actions/runs/11/rerun-failed-jobs"],
   },
   {
+    drafts: [3],
     events: [],
     job: train({ ...stamp, kind: "MarkReady", pr: 3 }),
     paths: ["POST /graphql"],
@@ -189,10 +190,21 @@ export const cases = [
   },
 ];
 
-interface CheckControls {
+interface ProviderControls {
   candidateChecks: readonly CheckRun[] | undefined;
+  drafts: readonly number[];
   trainChecks: readonly CheckRun[] | undefined;
 }
+
+const OpenedPull = Schema.Struct({ draft: Schema.Boolean });
+
+const ReadyMutation = Schema.Struct({
+  variables: Schema.Struct({ id: Schema.String }),
+});
+
+const nodeOf = (number: number) => `node-${number}`;
+
+const pullOf = (path: string) => Number(path.split("/")[2]);
 
 export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
   const reads: string[] = [];
@@ -200,13 +212,14 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
   const records: WouldDo[] = [];
   const posted: Event[] = [];
 
-  const checkControls: CheckControls = {
+  const provider: ProviderControls = {
     candidateChecks: undefined,
+    drafts: [],
     trainChecks: undefined,
   };
 
   const controls = {
-    ...checkControls,
+    ...provider,
     baseHead: BASE,
     baseline: true,
     carHead: car.headSha,
@@ -288,16 +301,19 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     }
 
     if (path.startsWith("/pulls/")) {
+      const number = pullOf(path);
+
       const head =
-        controls.runner && path === `/pulls/${car.number}`
+        controls.runner && number === car.number
           ? controls.carHead
           : controls.head;
 
       return {
+        draft: controls.drafts.includes(number),
         head: { sha: head },
         labels: [],
-        node_id: "node-3",
-        number: 3,
+        node_id: nodeOf(number),
+        number,
         user: { login: car.owner },
       };
     }
@@ -365,6 +381,13 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     }
 
     if (operation.path.endsWith("/merge")) {
+      if (controls.drafts.includes(pullOf(operation.path))) {
+        return yield* new ExecutorError({
+          code: "provider",
+          message: "Provider returned HTTP 405",
+        });
+      }
+
       return {
         merged: !controls.mergeRefused,
         message: "synthetic merge",
@@ -377,20 +400,36 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     }
 
     if (operation.path === "/pulls") {
-      return { head: { sha: HEAD }, node_id: "node-3", number: 3 };
+      const opened = yield* Schema.decodeUnknownEffect(OpenedPull)(
+        operation.body
+      ).pipe(Effect.orDie);
+
+      if (opened.draft) {
+        controls.drafts = [...controls.drafts, 3];
+      }
+
+      return { head: { sha: HEAD }, node_id: nodeOf(3), number: 3 };
     }
 
     if (operation.path === "/graphql") {
-      return controls.graphqlErrors
-        ? {
-            data: null,
-            errors: [{ message: "Resource not accessible by integration" }],
-          }
-        : {
-            data: {
-              markPullRequestReadyForReview: { pullRequest: { id: "node-3" } },
-            },
-          };
+      if (controls.graphqlErrors) {
+        return {
+          data: null,
+          errors: [{ message: "Resource not accessible by integration" }],
+        };
+      }
+
+      const { id } = (yield* Schema.decodeUnknownEffect(ReadyMutation)(
+        operation.body
+      ).pipe(Effect.orDie)).variables;
+
+      controls.drafts = controls.drafts.filter(
+        (number) => nodeOf(number) !== id
+      );
+
+      return {
+        data: { markPullRequestReadyForReview: { pullRequest: { id } } },
+      };
     }
 
     return null;

@@ -161,6 +161,10 @@ export class Rules {
         event.type === "go" && event.head === head,
         this.trail.join("\n")
       ).toBe(true);
+      expect(fresh[fresh.indexOf(merge) - 1]).toMatchObject({
+        kind: "MarkReady",
+        pr: merge.pr,
+      });
       expect(head).toBe(after.context.head);
       expect(
         lastChecks?.type === "checks" && greenByOracle(head, lastChecks.checks),

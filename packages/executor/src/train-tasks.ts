@@ -30,6 +30,7 @@ import type { TrainAdmission, TrainStop } from "./train-domain.js";
 import {
   admittedIntent,
   endsRehearsal,
+  failedStop,
   rerunFaults,
   rerunRefusal,
   stops,
@@ -476,15 +477,7 @@ const drain = Effect.fn("Train.drain")(function* drain(
   yield* recordTrain({ done: intent.kind, events, status: outcome.status });
 
   if (outcome.status === "failed") {
-    return {
-      ...claimed,
-      stop: stops.ExecutionFailed({
-        detail: outcome.error,
-        harm: "continuing after an unsuccessful or ambiguous operation",
-        next: "hand back; inspect the code and message before deciding on writes",
-        stop: `${intent.kind} failed`,
-      }),
-    };
+    return { ...claimed, stop: failedStop(intent, outcome.error) };
   }
 
   if (events.some(Predicate.isTagged("mergeRefused"))) {

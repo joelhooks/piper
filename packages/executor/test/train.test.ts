@@ -8,7 +8,7 @@ import type { TrainRecordValue, TrainStop } from "../src/train-domain.js";
 import { TrainRecord } from "../src/train-domain.js";
 import { decodeTrainAdmission, runTrain } from "../src/train.js";
 import { GitHubWrites } from "../src/writes.js";
-import { admission, finish, fixture } from "./train-fixture.js";
+import { admission, direct, finish, fixture } from "./train-fixture.js";
 
 const refusal = (
   stop: TrainStop | undefined,
@@ -20,11 +20,6 @@ const refusal = (
   expect(stop?.harm).toBe(harm);
   expect(stop?.next).toBe(next);
 };
-
-const direct = {
-  ...admission,
-  input: { ...admission.input, directRequiredChecks: [["unit"]] },
-} satisfies typeof admission;
 
 const carCheck = (
   name: string,
@@ -159,50 +154,60 @@ describe("admitted train runner", () => {
       })
   );
 
-  it.effect(
-    "lands a lone car level with main directly: one merge of its reviewed head, no train branch",
-    () =>
-      Effect.gen(function* directLanding() {
-        const test = yield* fixture();
+  for (const draft of [false, true]) {
+    it.effect(
+      `lands a lone ${draft ? "draft" : "ready"} car level with main directly: ready for review, then one merge of its reviewed head, no train branch`,
+      () =>
+        Effect.gen(function* directLanding() {
+          const test = yield* fixture();
+          test.github.controls.drafts = draft ? [admission.car.number] : [];
 
-        const result = yield* finish(
-          runTrain(direct).pipe(Effect.provide(test.layer))
-        );
+          const result = yield* finish(
+            runTrain(direct).pipe(Effect.provide(test.layer))
+          );
 
-        expect(result).toEqual({
-          exit: "landed",
-          stop: undefined,
-          success: true,
-          writes: 2,
-        });
-        expect(
-          test.github.writes.map(
-            (operation) => `${operation.method} ${operation.path}`
-          )
-        ).toEqual([
-          `PUT /pulls/${admission.car.number}/merge`,
-          `DELETE /issues/${admission.car.number}/labels/queue`,
-        ]);
-        expect(test.github.writes[0]?.body).toEqual({
-          merge_method: "merge",
-          sha: admission.car.headSha,
-        });
+          expect(result).toEqual({
+            exit: "landed",
+            stop: undefined,
+            success: true,
+            writes: 3,
+          });
+          expect(
+            test.github.writes.map(
+              (operation) => `${operation.method} ${operation.path}`
+            )
+          ).toEqual([
+            ...(draft ? ["POST /graphql"] : []),
+            `PUT /pulls/${admission.car.number}/merge`,
+            `DELETE /issues/${admission.car.number}/labels/queue`,
+          ]);
+          expect(test.github.writes.at(-2)?.body).toEqual({
+            merge_method: "merge",
+            sha: admission.car.headSha,
+          });
+          expect(test.github.controls.drafts).toEqual([]);
 
-        const records = yield* recordsOf(yield* test.sink.lines);
-        expect(doneKinds(records)).toEqual(["Merge", "RemoveLabels"]);
-        expect(pathsOf(records)).toEqual([
-          expect.objectContaining({
-            base: "base-a",
-            cars: [admission.car.number],
-            path: "direct-land",
-          }),
-        ]);
-      })
-  );
+          const records = yield* recordsOf(yield* test.sink.lines);
+          expect(doneKinds(records)).toEqual([
+            "MarkReady",
+            "Merge",
+            "RemoveLabels",
+          ]);
+          expect(pathsOf(records)).toEqual([
+            expect.objectContaining({
+              base: "base-a",
+              cars: [admission.car.number],
+              path: "direct-land",
+            }),
+          ]);
+        })
+    );
+  }
 
-  it.effect("rehearses a direct landing without writing", () =>
+  it.effect("rehearses a direct landing of a draft car without writing", () =>
     Effect.gen(function* directRehearsal() {
       const test = yield* fixture();
+      test.github.controls.drafts = [admission.car.number];
 
       const result = yield* finish(
         runTrain({ ...direct, mode: "dry-run" }).pipe(
@@ -223,6 +228,13 @@ describe("admitted train runner", () => {
       expect(test.github.records).toEqual([
         expect.objectContaining({
           head: admission.car.headSha,
+          kind: "MarkReady",
+          wouldDo: [
+            expect.objectContaining({ method: "POST", path: "/graphql" }),
+          ],
+        }),
+        expect.objectContaining({
+          head: admission.car.headSha,
           kind: "Merge",
           wouldDo: [
             expect.objectContaining({
@@ -232,6 +244,9 @@ describe("admitted train runner", () => {
           ],
         }),
       ]);
+      expect(test.github.records[0]?.wouldDo[0]?.body).toMatchObject({
+        variables: { id: `node-${admission.car.number}` },
+      });
     })
   );
 
