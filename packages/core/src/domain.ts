@@ -101,12 +101,15 @@ export const TrainInputSchema = Schema.Struct({
     Schema.Array(Schema.NonEmptyArray(Schema.String))
   ),
   ciTimeoutMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(60_000)),
+  directRequiredChecks: Schema.optionalKey(
+    Schema.Array(Schema.NonEmptyArray(Schema.String))
+  ),
   ignoredChecks: Schema.Array(Schema.String),
   maxCars: Schema.Int.check(
     Schema.isBetween({ maximum: MAX_CARS, minimum: 1 })
   ),
   pollMs: Schema.Int.check(
-    Schema.isBetween({ maximum: 120_000, minimum: 60_000 })
+    Schema.isBetween({ maximum: 120_000, minimum: 10_000 })
   ),
   repo: Schema.NonEmptyString,
   requireUpToDate: Schema.optionalKey(Schema.Boolean),
@@ -261,6 +264,14 @@ export const toTrainEvent = ({ _tag, ...payload }: PostedEvent): TrainEvent =>
 
 export type Purpose = "train" | "probe";
 
+export const DeparturePathSchema = Schema.Literals([
+  "direct-land",
+  "lone-board",
+  "train",
+]);
+
+export type DeparturePath = typeof DeparturePathSchema.Type;
+
 interface Stamped {
   readonly id: string;
   readonly at: number;
@@ -324,6 +335,13 @@ export type Fact = { readonly at: number } & (
       readonly cars: readonly number[];
     }
   | {
+      readonly kind: "departed";
+      readonly path: DeparturePath;
+      readonly reason: string;
+      readonly base: string;
+      readonly cars: readonly number[];
+    }
+  | {
       readonly kind: "verdict";
       readonly purpose: Purpose;
       readonly head: string;
@@ -378,7 +396,7 @@ export const SoloInputSchema = Schema.Struct({
   ignoredChecks: Schema.Array(Schema.String),
   owner: Schema.String,
   pollMs: Schema.Int.check(
-    Schema.isBetween({ maximum: 120_000, minimum: 60_000 })
+    Schema.isBetween({ maximum: 120_000, minimum: 10_000 })
   ),
   pr: PrNumber,
   repo: Schema.NonEmptyString,

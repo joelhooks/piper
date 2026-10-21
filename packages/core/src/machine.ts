@@ -18,12 +18,12 @@ import type {
 import { TrainEvents, TrainInputSchema } from "./domain.js";
 import type { Plan } from "./plan.js";
 import {
+  departure,
   excerptOf,
   infraOnly,
   MAX_CARS,
   probeHalf,
   RERUN_BELOW_P,
-  selectCars,
   suspectOrder,
   verdictOn,
 } from "./policy.js";
@@ -67,6 +67,7 @@ export interface TrainContext {
   readonly ignoredChecks: readonly string[];
   readonly candidateIgnoredChecks?: readonly string[];
   readonly candidateRequiredChecks?: readonly (readonly string[])[];
+  readonly directRequiredChecks?: readonly (readonly string[])[];
   readonly requireUpToDate?: boolean;
   readonly train: number;
   readonly maxCars: number;
@@ -112,6 +113,7 @@ type TrainTransition =
       readonly context: TrainContext;
       readonly target?:
         | "building"
+        | "direct"
         | "polling"
         | "testing"
         | "merging"
@@ -187,6 +189,75 @@ const startTesting = (context: TrainContext, at: number): TrainContext => ({
   checks: [],
   ciDeadlineAt: at + context.ciTimeoutMs,
   pollAt: at + context.pollMs,
+});
+
+const accept = (
+  context: TrainContext,
+  go: { readonly at: number; readonly by: string; readonly head: string },
+  ...drafts: readonly IntentDraft[]
+): TrainContext =>
+  record(
+    emit(
+      { ...context, go: { at: go.at, by: go.by, head: go.head } },
+      go.at,
+      ...drafts
+    ),
+    { at: go.at, by: go.by, head: go.head, kind: "go" }
+  );
+
+const land = (
+  context: TrainContext,
+  merged: {
+    readonly at: number;
+    readonly head: string;
+    readonly mergeSha: string;
+  },
+  prs: readonly number[]
+) => ({
+  context: record(
+    emit(
+      {
+        ...context,
+        merged: { at: merged.at, head: merged.head, mergeSha: merged.mergeSha },
+      },
+      merged.at,
+      { kind: "RemoveLabels", label: context.trainLabel, prs }
+    ),
+    {
+      at: merged.at,
+      cars: context.cars.map((car) => car.number),
+      head: merged.head,
+      kind: "merged",
+      mergeSha: merged.mergeSha,
+    }
+  ),
+  target: "#train.landed" as const,
+});
+
+const boardTrain = (
+  context: TrainContext,
+  at: number,
+  base: string,
+  reason: string
+) => ({
+  context: startBuild(
+    record(
+      { ...context, main: base },
+      {
+        at,
+        base,
+        cars: context.cars.map((car) => car.number),
+        kind: "departed",
+        path: "train",
+        reason,
+      }
+    ),
+    at,
+    base,
+    context.cars,
+    "train"
+  ),
+  target: "#train.building" as const,
 });
 
 const rerunChecks = (
@@ -454,6 +525,7 @@ export const trainMachine = setupEffect({
     checks: [],
     ciDeadlineAt: undefined,
     ciTimeoutMs: input.ciTimeoutMs,
+    directRequiredChecks: input.directRequiredChecks ?? [],
     dropped: [],
     facts: [],
     go: undefined,
@@ -756,7 +828,7 @@ export const trainMachine = setupEffect({
           context: { ...context, main: event.main, pool: event.candidates },
         }),
         depart: ({ context, event }): TrainTransition => {
-          const cars = selectCars(
+          const chosen = departure(
             context.pool,
             context.maxCars,
             context,
@@ -764,16 +836,41 @@ export const trainMachine = setupEffect({
             new Set(context.landed)
           );
 
-          if (context.main === undefined || cars.length === 0) {
+          const [car] = chosen?.cars ?? [];
+
+          if (
+            context.main === undefined ||
+            chosen === undefined ||
+            car === undefined
+          ) {
             return undefined;
+          }
+
+          const departed = record(
+            { ...context, cars: chosen.cars },
+            {
+              at: event.at,
+              base: context.main,
+              cars: chosen.cars.map((boarded) => boarded.number),
+              kind: "departed",
+              path: chosen.path,
+              reason: chosen.reason,
+            }
+          );
+
+          if (chosen.path === "direct-land") {
+            return {
+              context: { ...departed, head: car.headSha },
+              target: "direct",
+            };
           }
 
           return {
             context: startBuild(
-              { ...context, cars },
+              departed,
               event.at,
               context.main,
-              cars,
+              chosen.cars,
               "train"
             ),
             target: "building",
@@ -782,6 +879,64 @@ export const trainMachine = setupEffect({
         mainMoved: ({ context, event }) => ({
           context: { ...context, main: event.main },
         }),
+      },
+    },
+    direct: {
+      initial: "awaitingGo",
+      states: {
+        awaitingGo: {
+          on: {
+            go: ({ context, event }): TrainTransition => {
+              const [car] = context.cars;
+
+              if (car === undefined || event.head !== context.head) {
+                return undefined;
+              }
+
+              return {
+                context: accept(context, event, {
+                  kind: "Merge",
+                  matchHead: event.head,
+                  pr: car.number,
+                }),
+                target: "merging",
+              };
+            },
+            mainMoved: ({ context, event }) =>
+              event.main === context.main
+                ? undefined
+                : boardTrain(
+                    context,
+                    event.at,
+                    event.main,
+                    `main moved to ${event.main} before the direct merge`
+                  ),
+          },
+        },
+        merging: {
+          on: {
+            mainMoved: ({ context, event }) => ({
+              context: { ...context, main: event.main },
+            }),
+            mergeRefused: ({ context, event }) =>
+              event.head === context.head && context.main !== undefined
+                ? boardTrain(
+                    context,
+                    event.at,
+                    context.main,
+                    `the direct merge was refused: ${event.reason}`
+                  )
+                : undefined,
+            merged: ({ context, event }): TrainTransition =>
+              event.head === context.head && context.go?.head === event.head
+                ? land(
+                    context,
+                    event,
+                    context.cars.map((car) => car.number)
+                  )
+                : undefined,
+          },
+        },
       },
     },
     landed: { type: "final" },
@@ -832,17 +987,11 @@ export const trainMachine = setupEffect({
               }
 
               return {
-                context: record(
-                  emit(
-                    {
-                      ...context,
-                      go: { at: event.at, by: event.by, head: event.head },
-                    },
-                    event.at,
-                    { kind: "MarkReady", pr: context.pr },
-                    { kind: "Merge", matchHead: event.head, pr: context.pr }
-                  ),
-                  { at: event.at, by: event.by, head: event.head, kind: "go" }
+                context: accept(
+                  context,
+                  event,
+                  { kind: "MarkReady", pr: context.pr },
+                  { kind: "Merge", matchHead: event.head, pr: context.pr }
                 ),
                 target: "merging",
               };
@@ -871,46 +1020,13 @@ export const trainMachine = setupEffect({
                     "merge-refused"
                   )
                 : undefined,
-            merged: ({ context, event }): TrainTransition => {
-              if (
-                event.head !== context.head ||
-                context.go?.head !== event.head
-              ) {
-                return undefined;
-              }
-
-              return {
-                context: record(
-                  emit(
-                    {
-                      ...context,
-                      merged: {
-                        at: event.at,
-                        head: event.head,
-                        mergeSha: event.mergeSha,
-                      },
-                    },
-                    event.at,
-                    {
-                      kind: "RemoveLabels",
-                      label: context.trainLabel,
-                      prs: [
-                        ...context.cars.map((car) => car.number),
-                        ...(context.pr === undefined ? [] : [context.pr]),
-                      ],
-                    }
-                  ),
-                  {
-                    at: event.at,
-                    cars: context.cars.map((car) => car.number),
-                    head: event.head,
-                    kind: "merged",
-                    mergeSha: event.mergeSha,
-                  }
-                ),
-                target: "#train.landed",
-              };
-            },
+            merged: ({ context, event }): TrainTransition =>
+              event.head === context.head && context.go?.head === event.head
+                ? land(context, event, [
+                    ...context.cars.map((car) => car.number),
+                    ...(context.pr === undefined ? [] : [context.pr]),
+                  ])
+                : undefined,
           },
         },
       },

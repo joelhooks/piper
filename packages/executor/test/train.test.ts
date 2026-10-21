@@ -1,9 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
+import type { CheckRun } from "@joelhooks/piper/domain";
 import { ConfigProvider, Effect, Layer, Predicate, Schema } from "effect";
 
 import { ExecutorError } from "../src/domain.js";
 import { Recorder } from "../src/recorder.js";
-import type { TrainStop } from "../src/train-domain.js";
+import type { TrainRecordValue, TrainStop } from "../src/train-domain.js";
 import { TrainRecord } from "../src/train-domain.js";
 import { decodeTrainAdmission, runTrain } from "../src/train.js";
 import { GitHubWrites } from "../src/writes.js";
@@ -19,6 +20,38 @@ const refusal = (
   expect(stop?.harm).toBe(harm);
   expect(stop?.next).toBe(next);
 };
+
+const direct = {
+  ...admission,
+  input: { ...admission.input, directRequiredChecks: [["unit"]] },
+} satisfies typeof admission;
+
+const carCheck = (
+  name: string,
+  status: "completed" | "in_progress",
+  conclusion: "success" | null
+): CheckRun => ({
+  conclusion,
+  headSha: admission.car.headSha,
+  name,
+  status,
+});
+
+const recordsOf = Effect.fn("TrainTest.records")(function* recordsOf(
+  lines: readonly string[]
+) {
+  return yield* Effect.all(
+    lines.map((line) =>
+      Schema.decodeEffect(Schema.fromJsonString(TrainRecord))(line)
+    )
+  );
+});
+
+const doneKinds = (records: readonly TrainRecordValue[]) =>
+  records.flatMap((record) => ("done" in record ? [record.done] : []));
+
+const pathsOf = (records: readonly TrainRecordValue[]) =>
+  records.flatMap((record) => ("path" in record ? [record] : []));
 
 describe("admitted train runner", () => {
   it.effect(
@@ -125,6 +158,127 @@ describe("admitted train runner", () => {
         expect(test.github.writes).toHaveLength(7);
       })
   );
+
+  it.effect(
+    "lands a lone car level with main directly: one merge of its reviewed head, no train branch",
+    () =>
+      Effect.gen(function* directLanding() {
+        const test = yield* fixture();
+
+        const result = yield* finish(
+          runTrain(direct).pipe(Effect.provide(test.layer))
+        );
+
+        expect(result).toEqual({
+          exit: "landed",
+          stop: undefined,
+          success: true,
+          writes: 2,
+        });
+        expect(
+          test.github.writes.map(
+            (operation) => `${operation.method} ${operation.path}`
+          )
+        ).toEqual([
+          `PUT /pulls/${admission.car.number}/merge`,
+          `DELETE /issues/${admission.car.number}/labels/queue`,
+        ]);
+        expect(test.github.writes[0]?.body).toEqual({
+          merge_method: "merge",
+          sha: admission.car.headSha,
+        });
+
+        const records = yield* recordsOf(yield* test.sink.lines);
+        expect(doneKinds(records)).toEqual(["Merge", "RemoveLabels"]);
+        expect(pathsOf(records)).toEqual([
+          expect.objectContaining({
+            base: "base-a",
+            cars: [admission.car.number],
+            path: "direct-land",
+          }),
+        ]);
+      })
+  );
+
+  it.effect("rehearses a direct landing without writing", () =>
+    Effect.gen(function* directRehearsal() {
+      const test = yield* fixture();
+
+      const result = yield* finish(
+        runTrain({ ...direct, mode: "dry-run" }).pipe(
+          Effect.provide(
+            Layer.merge(
+              test.layer,
+              Layer.succeed(GitHubWrites, {
+                write: () => Effect.die("Dry-run attempted a write"),
+              })
+            )
+          )
+        )
+      );
+
+      expect(result.exit).toBe("rehearsal complete");
+      expect(result.writes).toBe(0);
+      expect(test.github.writes).toEqual([]);
+      expect(test.github.records).toEqual([
+        expect.objectContaining({
+          head: admission.car.headSha,
+          kind: "Merge",
+          wouldDo: [
+            expect.objectContaining({
+              method: "PUT",
+              path: `/pulls/${admission.car.number}/merge`,
+            }),
+          ],
+        }),
+      ]);
+    })
+  );
+
+  for (const [name, checks, reason] of [
+    [
+      "its own CI is still running",
+      [carCheck("unit", "in_progress", null)],
+      "its own CI has not finished",
+    ],
+    [
+      "its own CI lacks a direct group",
+      [carCheck("unit", "completed", "success")],
+      "its own CI has no success for full",
+    ],
+  ] as const) {
+    it.effect(
+      `boards a lone car on push and takes the train when ${name}`,
+      () =>
+        Effect.gen(function* loneBoard() {
+          const test = yield* fixture();
+          test.github.controls.candidateChecks = checks;
+
+          const result = yield* finish(
+            runTrain({
+              ...direct,
+              input: {
+                ...direct.input,
+                directRequiredChecks: [["unit"], ["full"]],
+              },
+            }).pipe(Effect.provide(test.layer))
+          );
+
+          expect(result.exit).toBe("landed");
+
+          const records = yield* recordsOf(yield* test.sink.lines);
+          expect(doneKinds(records)[0]).toBe("BuildTrain");
+          const paths = pathsOf(records);
+          expect(paths).toEqual([
+            expect.objectContaining({
+              cars: [admission.car.number],
+              path: "lone-board",
+            }),
+          ]);
+          expect(paths[0]?.reason).toContain(reason);
+        })
+    );
+  }
 
   it.effect("rehearses the build with a writes layer that dies on use", () =>
     Effect.gen(function* rehearsed() {

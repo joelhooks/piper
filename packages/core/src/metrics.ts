@@ -1,4 +1,4 @@
-import type { Fact, SoloFact, SoloOutcome } from "./domain.js";
+import type { DeparturePath, Fact, SoloFact, SoloOutcome } from "./domain.js";
 
 export interface LiveAt {
   readonly mergeSha: string;
@@ -16,6 +16,14 @@ const rebuildCounts = () => ({
   "main-moved": 0,
   "merge-refused": 0,
 });
+
+const departureCounts = (): Record<DeparturePath, number> => ({
+  "direct-land": 0,
+  "lone-board": 0,
+  train: 0,
+});
+
+const paths: readonly DeparturePath[] = ["direct-land", "lone-board", "train"];
 
 const outcomeCounts = (): Record<SoloOutcome, number> => ({
   baseRed: 0,
@@ -84,6 +92,7 @@ export const trainMetrics = (
     bisects: 0,
     ciRuns: 0,
     culprits: 0,
+    departures: departureCounts(),
     greenToMerged: new Array<number>(),
     landed: 0,
     mergeToLive: new Array<number>(),
@@ -104,6 +113,11 @@ export const trainMetrics = (
 
       case "rebuild": {
         result.rebuilds[fact.cause] += 1;
+        break;
+      }
+
+      case "departed": {
+        result.departures[fact.path] += 1;
         break;
       }
 
@@ -260,6 +274,10 @@ export const summarizeMetrics = (
     for (const cause of causes) {
       total.rebuilds[cause] += train.rebuilds[cause];
     }
+
+    for (const path of paths) {
+      total.departures[path] += train.departures[path];
+    }
   }
 
   const outcomes = outcomeCounts();
@@ -290,6 +308,7 @@ export const summarizeMetrics = (
       culprits: total.culprits,
       rate: ratio(total.culprits, total.bisects),
     },
+    departuresByPath: total.departures,
     greenToMergedMinutes: timing(total.greenToMerged),
     mergeToLiveMinutes: timing(total.mergeToLive),
     prsLandedPerCiRun: {

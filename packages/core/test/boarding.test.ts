@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Candidate } from "../src/domain.js";
-import { isEligible, verdictOn } from "../src/policy.js";
+import { isEligible, selectCars, verdictOn } from "../src/policy.js";
 
 const head = "synthetic-revision-41";
 
@@ -136,5 +136,68 @@ describe("boarding checks", () => {
         { ...rules, candidateRequiredChecks: [] }
       )
     ).toBe(false);
+  });
+});
+
+describe("lone car boarding", () => {
+  const rules = {
+    candidateIgnoredChecks: ["full suites"],
+    candidateRequiredChecks: [["light suites"]],
+    ignoredChecks: ["advisory"],
+    trainLabel: "train",
+  };
+
+  const boarded = (pool: readonly Candidate[]) =>
+    selectCars(pool, 2, rules).map((entry) => entry.number);
+
+  it("boards a lone car on push while its checks are absent or pending, never past a known red", () => {
+    expect(boarded([car([])])).toEqual([41]);
+    expect(
+      boarded([car([checkRun("light suites", "in_progress", null)])])
+    ).toEqual([41]);
+    expect(
+      boarded([car([checkRun("full suites", "completed", "failure")])])
+    ).toEqual([41]);
+    expect(
+      boarded([car([checkRun("advisory", "completed", "failure")])])
+    ).toEqual([41]);
+    expect(
+      boarded([car([checkRun("light suites", "completed", "failure")])])
+    ).toEqual([]);
+    expect(
+      boarded([
+        car([
+          checkRun("light suites", "in_progress", null),
+          checkRun("side coverage", "completed", "failure"),
+        ]),
+      ])
+    ).toEqual([]);
+  });
+
+  it("keeps the label, review and up-to-date gates for a lone car", () => {
+    const pending = car([checkRun("light suites", "in_progress", null)]);
+
+    expect(boarded([{ ...pending, labels: [] }])).toEqual([]);
+    expect(boarded([{ ...pending, operatorReviewed: false }])).toEqual([]);
+    expect(boarded([{ ...pending, upToDate: false }])).toEqual([]);
+    expect(
+      selectCars([{ ...pending, upToDate: false }], 1, {
+        ...rules,
+        requireUpToDate: false,
+      }).map((entry) => entry.number)
+    ).toEqual([41]);
+  });
+
+  it("keeps the light-done rule when two cars share the group", () => {
+    const pending = car([checkRun("light suites", "in_progress", null)]);
+
+    const done = {
+      ...car([checkRun("light suites", "completed", "success")]),
+      number: 42,
+    };
+
+    expect(boarded([pending, done])).toEqual([42]);
+    expect(boarded([pending, { ...pending, number: 43 }])).toEqual([]);
+    expect(boarded([pending, { ...pending, checks: [] }])).toEqual([41]);
   });
 });

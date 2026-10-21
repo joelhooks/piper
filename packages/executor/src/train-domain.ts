@@ -1,4 +1,5 @@
 import {
+  DeparturePathSchema,
   PostedEventSchema,
   PrNumber,
   Sha,
@@ -53,6 +54,13 @@ export const TrainRecord = Schema.Union([
     mode: TrainAdmissionSchema.fields.mode,
     repo: Schema.String,
     start: PrNumber,
+  }),
+  Schema.Struct({
+    ...timestamp,
+    base: Sha,
+    cars: Schema.Array(PrNumber),
+    path: DeparturePathSchema,
+    reason: Schema.NonEmptyString,
   }),
   Schema.Struct({
     ...timestamp,

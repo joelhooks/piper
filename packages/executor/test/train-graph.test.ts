@@ -19,7 +19,7 @@ it.effect(
     Effect.gen(function* graph() {
       const traces: string[][] = [];
 
-      for (const mode of ["landed", "rehearsed", "stopped"]) {
+      for (const mode of ["landed", "rehearsed", "stopped", "direct"]) {
         const test = yield* fixture();
         test.github.controls.carHead =
           mode === "stopped" ? "unreviewed" : admission.car.headSha;
@@ -29,6 +29,10 @@ it.effect(
             input: {
               admission: {
                 ...admission,
+                input: {
+                  ...admission.input,
+                  directRequiredChecks: mode === "direct" ? [["unit"]] : [],
+                },
                 mode: mode === "rehearsed" ? "dry-run" : "live",
               },
               seen: [],
@@ -87,6 +91,12 @@ it.effect(
         "rehearsed",
       ]);
       expect(traces[2]).toEqual(["preparing", "boarding.polling", "stopped"]);
+      expect([...new Set(traces[3])]).toEqual([
+        "preparing",
+        "boarding.polling",
+        "riding.draining",
+        "landed",
+      ]);
     }).pipe(
       Effect.provideService(
         ConfigProvider.ConfigProvider,
