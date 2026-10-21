@@ -7,7 +7,12 @@ import {
   SoloInputSchema,
   TrainInputSchema,
 } from "@joelhooks/piper/domain";
-import { DEFAULT_CARS } from "@joelhooks/piper/policy";
+import {
+  DEFAULT_CARS,
+  DEFAULT_CI_TIMEOUT_MS,
+  DEFAULT_POLL_MS,
+  DEFAULT_TRAIN_LABEL,
+} from "@joelhooks/piper/policy";
 import { failingOn, soloKey } from "@joelhooks/piper/solo";
 import { Clock, Effect, Predicate, Schema } from "effect";
 
@@ -97,13 +102,13 @@ const openTrainCell = Effect.fn("Router.openTrain")(function* openTrainCell(
   const body = yield* decode(TrainOpening)(yield* readJson(request));
 
   const input = yield* decode(TrainInputSchema)({
-    ciTimeoutMs: body.ciTimeoutMs ?? 3_600_000,
+    ciTimeoutMs: body.ciTimeoutMs ?? DEFAULT_CI_TIMEOUT_MS,
     ignoredChecks: names(env.IGNORED_CHECKS),
     maxCars: body.maxCars ?? Number(env.MAX_CARS ?? DEFAULT_CARS),
-    pollMs: body.pollMs ?? 90_000,
+    pollMs: body.pollMs ?? DEFAULT_POLL_MS,
     repo: env.REPO ?? "repository",
     train: body.train ?? 1,
-    trainLabel: env.TRAIN_LABEL ?? "train",
+    trainLabel: env.TRAIN_LABEL ?? DEFAULT_TRAIN_LABEL,
   });
 
   const allocated = yield* forward(
@@ -141,9 +146,9 @@ const openSoloCell = Effect.fn("Router.openSolo")(function* openSoloCell(
     ...opening,
     aggregateChecks: names(env.AGGREGATE_CHECKS),
     at: opening.at ?? at,
-    ciTimeoutMs: opening.ciTimeoutMs ?? 3_600_000,
+    ciTimeoutMs: opening.ciTimeoutMs ?? DEFAULT_CI_TIMEOUT_MS,
     ignoredChecks: names(env.IGNORED_CHECKS),
-    pollMs: opening.pollMs ?? 90_000,
+    pollMs: opening.pollMs ?? DEFAULT_POLL_MS,
     repo: env.REPO ?? "repository",
   });
 

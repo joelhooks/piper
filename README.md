@@ -45,16 +45,36 @@ Both machines append intents to an outbox and facts to a ledger. An external exe
 | `packages/core/src/release-policy.ts` | Pure expectation checker and runway predicate |
 | `packages/core/src/release.ts` | Release lifecycle |
 | `packages/core/src/release-host.ts` | Scoped release creation, restoration, stepping, and inspection |
+| `packages/core/src/config.ts` | `PiperConfigSchema`, `definePiperConfig` and `decodePiperConfig`: one typed home for a repository's settings |
+| `packages/core/src/schema-paths.ts` | The path-only schema issue extractor shared by the config, train and release decoders |
 
 The host helpers are storage-independent. They restore with `createEffectActor(machine, { snapshot })`, deliver events, and wait for a mailbox barrier before returning a persisted snapshot. Deadlines and poll times live in context. An integration reads the next alarm time and posts a `tick`; there are no process-local timers to restore.
 
 Repository settings are explicit inputs: `trainLabel`, `ignoredChecks`, and `aggregateChecks`. The synthetic examples use `train`, `branch-current`, and `checks`. These names carry no provider-specific policy. A train input may also list `candidateIgnoredChecks`: checks ignored only when deciding whether a car may board. Use it for a gate that is red by design on pull requests and only means something on the train head, such as a full-suite rollup. The train head is still judged on it. `requireUpToDate: false` lets a car board when its branch is behind main. The train branch merges every car onto main, so the train head's CI still judges the combined code. `candidateRequiredChecks` lists groups of check names: a car may board once every check in any one group has succeeded (skipped does not count), even while its other checks still run. A completed failure on any other check that isn't ignored still refuses the car. Without it, every car check must finish green before boarding. These check rules apply when two or more pull requests share the candidate pool, because one car's red would sink the others. A lone car boards on push: absent and pending checks do not hold it, and only a completed, failed, non-ignored check refuses it. The label, review and up-to-date rules still apply. `directRequiredChecks` lists check groups for the direct path, and is off when absent or empty. A lone car lands without a train only when its head contains main, its own checks on that head are complete and green under `ignoredChecks`, and every check in every group has succeeded. Skipped does not count. Otherwise it boards a train.
 
+## Repository configuration
+
+`@joelhooks/piper/config` gives each repository's settings one typed home. A repository writes `piper.config.ts` with `definePiperConfig`, which only types the object. `decodePiperConfig(value)` decodes it with `PiperConfigSchema` and fills the defaults. It rejects unknown keys at every level. A failure is a `PiperConfigError` that lists every bad path, sorted, and never the rejected value. [`packages/core/examples/piper.config.ts`](packages/core/examples/piper.config.ts) configures a fictional `acme/shop` with three Workers.
+
+| Section | Fields and defaults |
+| --- | --- |
+| `repo` | `owner`, `name` and `base`. The base branch has no default, as in the train admission. |
+| `mergeLine` | `approval` says where GO rows come from: `{ _tag: "File", path }`. `labels.train` (`train`), `labels.hold` (`hold`) and `labels.fullCi` (`full-ci`) must differ. `checks.train`, `checks.direct`, `checks.ignored` and `checks.ignoredAtBoarding` are core's `candidateRequiredChecks`, `directRequiredChecks`, `ignoredChecks` and `candidateIgnoredChecks`; each defaults to empty. `maxCars` defaults to 8, `pollMs` to 90 seconds, `ciTimeoutMs` to one hour and `requireUpToDate` to true. These four reuse core's train input schemas, so the ten-second poll floor is the same rule. `excluded` lists PR numbers and defaults to none. |
+| `deploy` | `paths.include` is required; `paths.exclude` and `migrations` default to none. `codeOnly` defaults to true. `ship` is `{ _tag: "Command", command, args }` or `{ _tag: "Workflow", workflow, ref }`. `lock` and `prep` are optional commands. `reviewCriteria` is an optional `{ _tag: "File", path }`. Paths are relative to the repository root and contain no `..`. |
+| `units` | Deployable Workers: a logical `name`, a Worker `script`, and `primary` and `scheduled`, both false by default. Names and scripts are distinct. At most one unit is primary. |
+| `observe` | `checks` lists `{ name, onFail: "escalate" \| "restore" \| "alarm" }` with distinct names. `cadence` defaults to `minMs` 15 seconds and `maxMs` 15 minutes; `minMs` cannot exceed `maxMs`. `timeoutMs` is required. The optional `canary` is `{ url, secret }` with an https URL. |
+| `alarms` | Alarm-only signals: `StartupCpuJump { unit, ratio }` against the last release, and `OutsideWindows { timeZone, windows }`. No alarm can refuse a release. The type has no refusing variant or field. |
+| `contacts` | `owner` is required. `alerts` and `cc` default to none, and `sender` to `Piper`. |
+
+Secrets are references, never values. `SecretRefSchema` accepts `{ _tag: "Env", name }`, `{ _tag: "Store", store, name }` or `{ _tag: "CloudflareSecret", name }`. Every free-text field rejects text that looks like an inline credential. That covers known token prefixes, private-key blocks, JWTs, bearer headers, passwords in URLs, `token=`-style assignments and long mixed-case alphanumeric runs. Build tagged values with their schema, for example `SecretRefSchema.cases.Env.make({ name: "SHOP_CANARY_TOKEN" })`.
+
+Today only the train admission reads a config, through `trainAdmission` in `@joelhooks/piper-executor/train-config`. See [the train admission contract](packages/executor/TRAIN.md). The deploy, units, observe, alarms and contacts sections are typed for later steps.
+
 ## Packages
 
 | Package | Owns | Run |
 | --- | --- | --- |
-| `packages/core` (`@joelhooks/piper`) | Machines, policy, host helpers, plan graph, metrics, release, candidate decision | `pnpm test` |
+| `packages/core` (`@joelhooks/piper`) | Machines, policy, host helpers, plan graph, metrics, release, candidate decision, repository config | `pnpm test` |
 | `packages/worker` (`@joelhooks/piper-worker`) | HTTP host: Durable Objects, SQLite storage, auth, routes, `/metrics`, Alchemy declaration | `pnpm worker:plan` |
 | `packages/executor` (`@joelhooks/piper-executor`) | Drains train, solo and release jobs; admitted train and release drivers; the claim journal. Bin `piper-executor` | `pnpm executor --repo <owner/repo> --api <url>` |
 | `packages/shadow` (`@joelhooks/piper-shadow`) | Dry-run train comparison against an operator trace. Bin `piper-shadow` | `pnpm shadow --repo <owner/repo> --since <time> --replay <dir>` |

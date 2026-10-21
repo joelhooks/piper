@@ -38,6 +38,12 @@ The admitted car is alone in its candidate pool, so it boards on push: absent an
 
 Live mode requires `PIPER_LIVE_ADMITTED_REPO` to equal `repo` exactly. Refusal happens before token execution or provider reads. Dry-run still reads GitHub, but uses a writer that dies on use. It records the proposed build, or the proposed direct merge and the ready-mark a draft car needs before it, and exits before any later intent.
 
+## Admission from configuration
+
+`trainAdmission(config, launch)` from `@joelhooks/piper-executor/train-config` builds this admission from a decoded `PiperConfig`. The config supplies the repository, the base branch and every `input` rule. The launch supplies `car`, `goBy`, `mode`, `tokenCommand` and `train`, which change on every run. The mapping writes core's defaults out: empty check groups and `requireUpToDate: true` mean the same as absent keys. The config's hold label, full-CI label, excluded PRs and approval source are not part of today's admission.
+
+`test/train-config.test.ts` decodes a config-built admission with `decodeTrainAdmission`. A property test round-trips generated hand-written admissions through equivalent configs. A third test runs the hand-written train and direct fixtures beside their config-built twins and gets identical results, writes and records.
+
 ## Lifecycle and stops
 
 The runner machine uses `setupEffect` and starts through `createEffectActor`. Preparation checks admission and saved state. `boarding.polling` posts candidates and departs once. A direct departure already has a head, so the runner posts head-bound GO for the admitted head in the same poll and moves straight to `riding.draining`. `boarding.draining` executes unseen intents until a successful `BuildTrain` moves it into `riding.draining`. An empty boarding drain stops with `car not boarded`. `riding.polling` posts tick and head-bound GO, then `riding.draining` executes one unseen intent per invocation. An empty riding drain ends `landed` once the core train has landed, otherwise it returns to polling. Final states are `landed`, `stopped` and `rehearsed`.

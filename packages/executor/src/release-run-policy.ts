@@ -3,11 +3,11 @@ import type {
   ReleaseRow,
 } from "@joelhooks/piper/release-domain";
 import { checkReleaseExpectation } from "@joelhooks/piper/release-policy";
+import { schemaIssuePaths } from "@joelhooks/piper/schema-paths";
 import { Data, Predicate } from "effect";
 import type { Schema } from "effect";
 
 import type { ReleaseRefusal, RunLogLine } from "./release-run-domain.js";
-import { schemaIssuePaths } from "./schema-paths.js";
 
 const refusals = Data.taggedEnum<ReleaseRefusal>();
 

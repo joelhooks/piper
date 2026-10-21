@@ -1,11 +1,11 @@
 import type { CheckRun, Intent } from "@joelhooks/piper/domain";
 import { isFailed, isInfra, isLone, latestRuns } from "@joelhooks/piper/policy";
+import { schemaIssuePaths } from "@joelhooks/piper/schema-paths";
 import type { TrainContext } from "@joelhooks/piper/train";
 import { Data } from "effect";
 import type { Schema } from "effect";
 
 import type { ExecutorError } from "./domain.js";
-import { schemaIssuePaths } from "./schema-paths.js";
 import type { TrainAdmission, TrainStop } from "./train-domain.js";
 
 export const stops = Data.taggedEnum<TrainStop>();

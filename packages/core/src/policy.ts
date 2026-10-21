@@ -14,6 +14,12 @@ export const MAX_CARS = 12;
 
 export const DEFAULT_CARS = 8;
 
+export const DEFAULT_POLL_MS = 90_000;
+
+export const DEFAULT_CI_TIMEOUT_MS = 3_600_000;
+
+export const DEFAULT_TRAIN_LABEL = "train";
+
 export interface RepoRules {
   readonly trainLabel: string;
 
