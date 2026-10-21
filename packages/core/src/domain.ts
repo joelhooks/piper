@@ -10,6 +10,18 @@ export const PrNumber = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 
 export const Millis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
+export const PollMs = Schema.Int.check(
+  Schema.isBetween({ maximum: 120_000, minimum: 10_000 })
+);
+
+export const CiTimeoutMs = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(60_000)
+);
+
+export const MaxCars = Schema.Int.check(
+  Schema.isBetween({ maximum: MAX_CARS, minimum: 1 })
+);
+
 export const Conclusion = Schema.Literals([
   "success",
   "failure",
@@ -100,17 +112,13 @@ export const TrainInputSchema = Schema.Struct({
   candidateRequiredChecks: Schema.optionalKey(
     Schema.Array(Schema.NonEmptyArray(Schema.String))
   ),
-  ciTimeoutMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(60_000)),
+  ciTimeoutMs: CiTimeoutMs,
   directRequiredChecks: Schema.optionalKey(
     Schema.Array(Schema.NonEmptyArray(Schema.String))
   ),
   ignoredChecks: Schema.Array(Schema.String),
-  maxCars: Schema.Int.check(
-    Schema.isBetween({ maximum: MAX_CARS, minimum: 1 })
-  ),
-  pollMs: Schema.Int.check(
-    Schema.isBetween({ maximum: 120_000, minimum: 10_000 })
-  ),
+  maxCars: MaxCars,
+  pollMs: PollMs,
   repo: Schema.NonEmptyString,
   requireUpToDate: Schema.optionalKey(Schema.Boolean),
   train: PrNumber,
@@ -391,13 +399,11 @@ export const SoloInputSchema = Schema.Struct({
   at: Millis,
   base: Sha,
   checks: Schema.Array(CheckRunSchema),
-  ciTimeoutMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(60_000)),
+  ciTimeoutMs: CiTimeoutMs,
   head: Sha,
   ignoredChecks: Schema.Array(Schema.String),
   owner: Schema.String,
-  pollMs: Schema.Int.check(
-    Schema.isBetween({ maximum: 120_000, minimum: 10_000 })
-  ),
+  pollMs: PollMs,
   pr: PrNumber,
   repo: Schema.NonEmptyString,
 });

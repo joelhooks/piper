@@ -22,6 +22,7 @@
     "./settings": "./src/services.ts",
     "./token": "./src/token.ts",
     "./train": "./src/train.ts",
+    "./train-config": "./src/train-config.ts",
     "./train-domain": "./src/train-domain.ts",
     "./train-store": "./src/train-store.ts",
     "./transport": "./src/transport.ts",

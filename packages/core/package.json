@@ -24,7 +24,9 @@
     "./release-domain": "./src/release-domain.ts",
     "./release-policy": "./src/release-policy.ts",
     "./release-host": "./src/release-host.ts",
-    "./candidate": "./src/candidate.ts"
+    "./candidate": "./src/candidate.ts",
+    "./config": "./src/config.ts",
+    "./schema-paths": "./src/schema-paths.ts"
   },
   "dependencies": {
     "@xstate/effect": "1.0.0-alpha.9",
