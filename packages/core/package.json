@@ -27,6 +27,7 @@
     "./candidate": "./src/candidate.ts",
     "./config": "./src/config.ts",
     "./deploy-paths": "./src/deploy-paths.ts",
+    "./accept": "./src/accept.ts",
     "./schema-paths": "./src/schema-paths.ts"
   },
   "dependencies": {

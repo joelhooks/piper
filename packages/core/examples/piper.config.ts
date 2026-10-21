@@ -63,6 +63,7 @@ export default definePiperConfig({
       { name: "readback", onFail: "restore" },
       { name: "errors", onFail: "escalate" },
       { name: "latency", onFail: "alarm" },
+      { name: "jobs", onFail: "escalate", scope: ["{jobs,scheduler}/**"] },
     ],
     timeoutMs: 1_800_000,
   },
