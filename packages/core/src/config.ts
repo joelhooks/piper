@@ -1,6 +1,7 @@
 import { Effect, flow, Schema } from "effect";
 
 import { CiTimeoutMs, MaxCars, PollMs, PrNumber } from "./domain.js";
+import { isGlob } from "./glob.js";
 import {
   DEFAULT_CARS,
   DEFAULT_CI_TIMEOUT_MS,
@@ -160,14 +161,27 @@ export const ReviewSourceSchema = Schema.TaggedUnion({
 
 export type ReviewSource = typeof ReviewSourceSchema.Type;
 
+const Glob = Text.check(
+  Schema.makeFilter<string>(isGlob, {
+    expected: "a repository-relative glob built from **, * and {a,b}",
+  })
+);
+
+export const PathRulesSchema = Schema.Struct({
+  default: orDefault(Schema.Literals(["deploy", "skip"]), "deploy"),
+  rules: orDefault(
+    Schema.Array(Schema.Struct({ deploy: Schema.Boolean, glob: Glob })),
+    []
+  ),
+});
+
+export type PathRules = typeof PathRulesSchema.Type;
+
 const Deploy = Schema.Struct({
   codeOnly: orDefault(Schema.Boolean, true),
   lock: Schema.optionalKey(Hook),
   migrations: orDefault(Schema.Array(RepoPath), []),
-  paths: Schema.Struct({
-    exclude: orDefault(Schema.Array(RepoPath), []),
-    include: Schema.NonEmptyArray(RepoPath),
-  }),
+  paths: orDefault(PathRulesSchema, {}),
   prep: Schema.optionalKey(Hook),
   reviewCriteria: Schema.optionalKey(ReviewSourceSchema),
   ship: ShipPortSchema,
