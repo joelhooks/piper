@@ -1,4 +1,4 @@
-import type { Intent } from "@joelhooks/piper/domain";
+import type { Intent, TrainEvent } from "@joelhooks/piper/domain";
 import { PostedEventSchema, toTrainEvent } from "@joelhooks/piper/domain";
 import {
   openTrain,
@@ -29,6 +29,7 @@ import type { RecordSink } from "./record-sink.js";
 import type { TrainAdmission, TrainStop } from "./train-domain.js";
 import {
   admittedIntent,
+  endsRehearsal,
   rerunFaults,
   rerunRefusal,
   stops,
@@ -171,9 +172,9 @@ export const initializeTrain = Effect.fn("Train.initialize")(
       ...context,
       seen: (existing?.seen ?? []).filter(
         (id) =>
-          admission.mode !== "dry-run" ||
           !snapshot.context.intents.some(
-            (intent) => intent.id === id && intent.kind === "BuildTrain"
+            (intent) =>
+              intent.id === id && endsRehearsal(admission.mode, intent.kind)
           )
       ),
       train,
@@ -218,6 +219,13 @@ type PostObservation = (
   observation: PollObservation
 ) => Effect.Effect<PersistedTrain, ExecutorError | TrainFinished, GitHub>;
 
+const goFor = (
+  admission: TrainAdmission,
+  at: number,
+  head: string | undefined
+): readonly TrainEvent[] =>
+  head === undefined ? [] : [{ at, by: admission.goBy, head, type: "go" }];
+
 const depart = Effect.fn("Train.depart")(function* depart({
   admission,
   at,
@@ -227,7 +235,7 @@ const depart = Effect.fn("Train.depart")(function* depart({
 }: PollObservation) {
   const github = yield* GitHub;
 
-  return yield* stepTrain(train, [
+  const departed = yield* stepTrain(train, [
     {
       at,
       candidates: [
@@ -255,18 +263,17 @@ const depart = Effect.fn("Train.depart")(function* depart({
     },
     { at, type: "depart" },
   ]);
+
+  const go = goFor(admission, at, (yield* readTrain(departed)).context.head);
+
+  return go.length === 0 ? departed : yield* stepTrain(departed, go);
 });
 
 const tick = ({ admission, at, snapshot, train }: PollObservation) =>
-  stepTrain(
-    train,
-    snapshot.context.head === undefined
-      ? [{ at, type: "tick" }]
-      : [
-          { at, type: "tick" },
-          { at, by: admission.goBy, head: snapshot.context.head, type: "go" },
-        ]
-  );
+  stepTrain(train, [
+    { at, type: "tick" },
+    ...goFor(admission, at, snapshot.context.head),
+  ]);
 
 const poll = Effect.fn("Train.poll")(function* poll(
   context: RunnerContext,
@@ -351,6 +358,19 @@ const poll = Effect.fn("Train.poll")(function* poll(
   });
 
   const after = yield* readTrain(observed);
+
+  yield* Effect.forEach(
+    after.context.facts
+      .slice(snapshot.context.facts.length)
+      .flatMap((fact) => (fact.kind === "departed" ? [fact] : [])),
+    (fact) =>
+      recordTrain({
+        base: fact.base,
+        cars: fact.cars,
+        path: fact.path,
+        reason: fact.reason,
+      })
+  );
   yield* recordTrain({
     cars: after.context.cars.length,
     head: after.context.head,

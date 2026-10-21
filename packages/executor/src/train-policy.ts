@@ -1,5 +1,5 @@
 import type { CheckRun, Intent } from "@joelhooks/piper/domain";
-import { isFailed, isInfra, latestRuns } from "@joelhooks/piper/policy";
+import { isFailed, isInfra, isLone, latestRuns } from "@joelhooks/piper/policy";
 import type { TrainContext } from "@joelhooks/piper/train";
 import { Data } from "effect";
 import type { Schema } from "effect";
@@ -41,10 +41,28 @@ export const unavailable = (cause: unknown): TrainStop =>
     stop: "runner unavailable",
   });
 
+export const endsRehearsal = (
+  mode: TrainAdmission["mode"] | undefined,
+  kind: Intent["kind"] | undefined
+): boolean => mode === "dry-run" && (kind === "BuildTrain" || kind === "Merge");
+
 export const admittedIntent = (
   admission: TrainAdmission,
   intent: Intent
 ): TrainStop | undefined => {
+  if (
+    intent.kind === "Merge" &&
+    intent.pr === admission.car.number &&
+    intent.matchHead !== admission.car.headSha
+  ) {
+    return stops.OutsideAdmission({
+      detail: intent,
+      harm: "landing a head nobody reviewed",
+      next: "name the new head",
+      stop: "intent outside admission",
+    });
+  }
+
   if (intent.kind === "BuildTrain") {
     const [car] = intent.cars;
 
@@ -136,12 +154,14 @@ export const notBoarded = (
   );
 
   const required = admission.input.candidateRequiredChecks ?? [];
+  const alone = isLone(context.pool);
 
   const checks = latestRuns(candidate?.checks ?? []).filter(
     (check) => check.headSha === admission.car.headSha
   );
 
   const absent =
+    !alone &&
     required.length > 0 &&
     required.every((group) =>
       group.some((name) => !checks.some((check) => check.name === name))
@@ -160,7 +180,11 @@ export const notBoarded = (
   );
 
   return stops.NotBoarded({
-    detail: { dropped: context.dropped, rejected: context.rejected },
+    detail: {
+      dropped: context.dropped,
+      path: alone ? "lone-board" : "train",
+      rejected: context.rejected,
+    },
     harm: "landing a car that did not pass boarding policy",
     next: boardingNext(absent || behind, failed),
     stop: "car not boarded",

@@ -24,6 +24,11 @@ const TrainMeasurements = Schema.Struct({
   bisects: Count,
   ciRuns: Count,
   culprits: Count,
+  departures: Schema.Struct({
+    "direct-land": Count,
+    "lone-board": Count,
+    train: Count,
+  }),
   greenToMerged: Schema.Array(Minutes),
   landed: Count,
   mergeToLive: Schema.Array(Minutes),

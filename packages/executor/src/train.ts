@@ -10,7 +10,7 @@ import { types } from "xstate";
 
 import { TrainAdmissionSchema } from "./train-domain.js";
 import type { TrainAdmission, TrainStop } from "./train-domain.js";
-import { admissionRefusal, notBoarded } from "./train-policy.js";
+import { admissionRefusal, endsRehearsal, notBoarded } from "./train-policy.js";
 import { recordTrain } from "./train-store.js";
 import {
   boardTrain,
@@ -63,14 +63,12 @@ export const trainRunnerMachine = setupEffect({
                 return { context, target: "#runner.stopped" };
               }
 
+              if (endsRehearsal(context.admission?.mode, intent)) {
+                return { context, target: "#runner.rehearsed" };
+              }
+
               if (intent === "BuildTrain") {
-                return {
-                  context,
-                  target:
-                    context.admission?.mode === "dry-run"
-                      ? "#runner.rehearsed"
-                      : "#runner.riding.draining",
-                };
+                return { context, target: "#runner.riding.draining" };
               }
 
               if (
@@ -95,13 +93,21 @@ export const trainRunnerMachine = setupEffect({
         polling: {
           invoke: {
             input: ({ context }) => context,
-            onDone: ({ event }) => ({
-              context: event.output.context,
-              target:
-                event.output.snapshot?.value === "landed"
-                  ? "#runner.landed"
-                  : "draining",
-            }),
+            onDone: ({ event }) => {
+              const { context, snapshot } = event.output;
+
+              if (snapshot?.value === "landed") {
+                return { context, target: "#runner.landed" };
+              }
+
+              return {
+                context,
+                target:
+                  snapshot?.context.head === undefined
+                    ? "draining"
+                    : "#runner.riding.draining",
+              };
+            },
             src: "boarding",
           },
         },
@@ -136,12 +142,27 @@ export const trainRunnerMachine = setupEffect({
         draining: {
           invoke: {
             input: ({ context }) => context,
-            onDone: ({ event }) => ({
-              context: event.output.context,
-              reenter: true,
-              target:
-                event.output.intent === undefined ? "polling" : "draining",
-            }),
+            onDone: ({ event }) => {
+              const { context, intent, snapshot } = event.output;
+
+              if (context.stop !== undefined) {
+                return { context, target: "#runner.stopped" };
+              }
+
+              if (endsRehearsal(context.admission?.mode, intent)) {
+                return { context, target: "#runner.rehearsed" };
+              }
+
+              if (intent === undefined && snapshot?.value === "landed") {
+                return { context, target: "#runner.landed" };
+              }
+
+              return {
+                context,
+                reenter: true,
+                target: intent === undefined ? "polling" : "draining",
+              };
+            },
             src: "draining",
           },
         },

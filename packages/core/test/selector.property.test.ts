@@ -4,7 +4,7 @@ import * as Arbitrary from "effect/Arbitrary";
 
 import type { Candidate, Car } from "../src/domain.js";
 import type { Plan } from "../src/plan.js";
-import { isEligible, MAX_CARS, selectCars } from "../src/policy.js";
+import { isEligible, isLone, MAX_CARS, selectCars } from "../src/policy.js";
 import { ciOn, input } from "./fixtures.js";
 
 const entry = Schema.Struct({
@@ -26,6 +26,9 @@ const cap = Arbitrary.schema(
 );
 
 const rules = input(1);
+
+const boardsFrom = (pool: readonly Candidate[]) => (candidate: Candidate) =>
+  isEligible(candidate, rules, isLone(pool));
 
 const scenario = (generated: readonly (typeof entry.Type)[]) => {
   const nodes = generated.map((value, index) => {
@@ -96,7 +99,7 @@ const legacy = (
       break;
     }
 
-    if (!seen.has(candidate.number) && isEligible(candidate, rules)) {
+    if (!seen.has(candidate.number) && boardsFrom(pool)(candidate)) {
       seen.add(candidate.number);
       cars.push({
         headSha: candidate.headSha,
@@ -146,7 +149,7 @@ describe("plan-aware selection", () => {
             (candidate) =>
               candidate.number === car.number &&
               candidate.headSha === car.headSha &&
-              isEligible(candidate, rules)
+              boardsFrom(pool)(candidate)
           )
         ).toBe(true);
       }
@@ -211,7 +214,7 @@ describe("plan-aware selection", () => {
       };
 
       const expected = pool
-        .filter((candidate) => isEligible(candidate, rules))
+        .filter(boardsFrom(pool))
         .filter(
           (candidate, index, eligible) =>
             eligible.findIndex((other) => other.number === candidate.number) ===
@@ -307,7 +310,7 @@ describe("plan-aware selection", () => {
       let waiting = pool;
 
       const expected = pool
-        .filter((candidate) => isEligible(candidate, rules))
+        .filter(boardsFrom(pool))
         .toSorted(
           (a, b) =>
             (plan.nodes.find((node) => node.pr === a.number)?.priority ?? 0) -

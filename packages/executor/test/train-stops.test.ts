@@ -1,12 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { CheckRun } from "@joelhooks/piper/domain";
-import { openTrain, stepTrain } from "@joelhooks/piper/host";
+import { openTrain, readTrain, stepTrain } from "@joelhooks/piper/host";
 import { Effect, Layer } from "effect";
 
 import { ExecutorError } from "../src/domain.js";
 import { GitHub } from "../src/github.js";
-import type { TrainAdmission, TrainStop } from "../src/train-domain.js";
-import { admittedIntent, rerunRefusal } from "../src/train-policy.js";
+import type { TrainStop } from "../src/train-domain.js";
+import {
+  admittedIntent,
+  notBoarded,
+  rerunRefusal,
+} from "../src/train-policy.js";
 import { TrainStore } from "../src/train-store.js";
 import { runTrain } from "../src/train.js";
 import { admission, finish, fixture } from "./train-fixture.js";
@@ -34,33 +38,25 @@ const completed = (
 });
 
 describe("train refusals", () => {
-  for (const behind of [false, true]) {
-    it.effect(
-      `asks for current base CI when ${behind ? "the car is behind" : "part of a required check group is absent"}`,
-      () =>
-        Effect.gen(function* currentCi() {
-          const test = yield* fixture();
-          test.github.controls.upToDate = !behind;
+  it.effect("asks for current base CI when the lone car is behind", () =>
+    Effect.gen(function* currentCi() {
+      const test = yield* fixture();
+      test.github.controls.upToDate = false;
 
-          const input = {
-            ...admission.input,
-            candidateRequiredChecks: behind ? [["unit"]] : [["unit", "lint"]],
-          } satisfies TrainAdmission["input"];
+      const result = yield* finish(
+        runTrain(admission).pipe(Effect.provide(test.layer))
+      );
 
-          const result = yield* finish(
-            runTrain({ ...admission, input }).pipe(Effect.provide(test.layer))
-          );
-
-          refusal(
-            result.stop,
-            "NotBoarded",
-            "landing a car that did not pass boarding policy",
-            "merge the base branch into the car so current CI runs"
-          );
-          expect(test.github.writes).toEqual([]);
-        })
-    );
-  }
+      refusal(
+        result.stop,
+        "NotBoarded",
+        "landing a car that did not pass boarding policy",
+        "merge the base branch into the car so current CI runs"
+      );
+      expect(result.stop?.detail).toMatchObject({ path: "lone-board" });
+      expect(test.github.writes).toEqual([]);
+    })
+  );
 
   it.effect("rechecks the environment-only red before rerunning", () =>
     Effect.gen(function* freshRerun() {
@@ -261,51 +257,109 @@ describe("train refusals", () => {
     })
   );
 
-  for (const kind of ["absent", "red", "pending"] satisfies readonly (
-    | "absent"
-    | "red"
-    | "pending"
-  )[]) {
-    it.effect(`derives boarding advice for a ${kind} required check`, () =>
-      Effect.gen(function* boarding() {
+  const options = {
+    absent: [],
+    pending: [
+      {
+        conclusion: null,
+        headSha: admission.car.headSha,
+        name: "unit",
+        status: "in_progress",
+      },
+    ],
+    red: [completed("failure", admission.car.headSha)],
+  } satisfies Record<string, readonly CheckRun[]>;
+
+  it.effect("refuses a lone car whose own CI already shows a red", () =>
+    Effect.gen(function* knownRed() {
+      const test = yield* fixture();
+      test.github.controls.candidateChecks = options.red;
+
+      const result = yield* finish(
+        runTrain(admission).pipe(Effect.provide(test.layer))
+      );
+
+      refusal(
+        result.stop,
+        "NotBoarded",
+        "landing a car that did not pass boarding policy",
+        "fix the red"
+      );
+      expect(result.exit).toBe("car not boarded");
+      expect(test.github.writes).toEqual([]);
+    })
+  );
+
+  for (const kind of ["absent", "pending"] as const) {
+    it.effect(`boards a lone car on push while its check is ${kind}`, () =>
+      Effect.gen(function* loneBoard() {
         const test = yield* fixture();
-
-        const options = {
-          absent: [],
-          pending: [
-            {
-              conclusion: null,
-              headSha: admission.car.headSha,
-              name: "unit",
-              status: "in_progress",
-            },
-          ],
-          red: [completed("failure", admission.car.headSha)],
-        } satisfies Record<string, readonly CheckRun[]>;
-
-        const next = {
-          absent: "merge the base branch into the car so current CI runs",
-          pending: "board again when it finishes",
-          red: "fix the red",
-        };
-
-        const checks = options[kind];
-
-        test.github.controls.candidateChecks = checks;
+        test.github.controls.candidateChecks = options[kind];
 
         const result = yield* finish(
-          runTrain(admission).pipe(Effect.provide(test.layer))
+          runTrain({
+            ...admission,
+            input: {
+              ...admission.input,
+              candidateRequiredChecks: [["unit", "lint"]],
+            },
+          }).pipe(Effect.provide(test.layer))
         );
 
-        refusal(
-          result.stop,
-          "NotBoarded",
-          "landing a car that did not pass boarding policy",
-          next[kind]
-        );
-        expect(result.exit).toBe("car not boarded");
-        expect(test.github.writes).toEqual([]);
+        expect(result.exit).toBe("landed");
+        expect(test.github.writes[0]?.path).toBe("/git/refs/heads/train%2F1");
       })
+    );
+  }
+
+  for (const kind of ["absent", "red", "pending"] as const) {
+    it.effect(
+      `keeps light-done advice for a ${kind} required check in a shared group`,
+      () =>
+        Effect.gen(function* sharedAdvice() {
+          const opened = yield* openTrain(admission.input);
+
+          const candidate = {
+            checks: options[kind],
+            headSha: admission.car.headSha,
+            labels: [admission.input.trainLabel],
+            number: admission.car.number,
+            operatorReviewed: true,
+            owner: "author-a",
+            upToDate: true,
+          };
+
+          const waiting = yield* readTrain(
+            yield* stepTrain(opened, [
+              {
+                at: 0,
+                candidates: [
+                  candidate,
+                  { ...candidate, headSha: "car-b", number: 2 },
+                ],
+                main: "base-a",
+                type: "candidates",
+              },
+              { at: 0, type: "depart" },
+            ])
+          );
+
+          const next = {
+            absent: "merge the base branch into the car so current CI runs",
+            pending: "board again when it finishes",
+            red: "fix the red",
+          };
+
+          const stop = notBoarded(waiting.context, admission);
+
+          refusal(
+            stop,
+            "NotBoarded",
+            "landing a car that did not pass boarding policy",
+            next[kind]
+          );
+          expect(stop.detail).toMatchObject({ path: "train" });
+        })
     );
   }
 
@@ -368,6 +422,27 @@ describe("train refusals", () => {
     }
 
     expect(admittedIntent(admission, template)).toBeUndefined();
+  });
+
+  it("merges the admitted car directly only at its reviewed head", () => {
+    const merge = {
+      at: 0,
+      id: "train-1/1",
+      kind: "Merge",
+      matchHead: admission.car.headSha,
+      pr: admission.car.number,
+    } satisfies Parameters<typeof admittedIntent>[1];
+
+    expect(admittedIntent(admission, merge)).toBeUndefined();
+    expect(
+      admittedIntent(admission, { ...merge, matchHead: "train-head", pr: 3 })
+    ).toBeUndefined();
+    refusal(
+      admittedIntent(admission, { ...merge, matchHead: "unreviewed" }),
+      "OutsideAdmission",
+      "landing a head nobody reviewed",
+      "name the new head"
+    );
   });
 
   it.effect("reruns an environment-only red once and then lands", () =>

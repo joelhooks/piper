@@ -1,6 +1,12 @@
 import { Data, Predicate } from "effect";
 
-import type { Candidate, Car, CheckRun, Rank } from "./domain.js";
+import type {
+  Candidate,
+  Car,
+  CheckRun,
+  DeparturePath,
+  Rank,
+} from "./domain.js";
 import type { Plan } from "./plan.js";
 import { conflictPairs, readyNodes } from "./plan.js";
 
@@ -16,6 +22,8 @@ export interface RepoRules {
   readonly candidateIgnoredChecks?: readonly string[];
 
   readonly candidateRequiredChecks?: readonly (readonly string[])[];
+
+  readonly directRequiredChecks?: readonly (readonly string[])[];
 
   readonly requireUpToDate?: boolean;
 }
@@ -108,54 +116,118 @@ export const verdictOn = (
     : Verdict.Pending();
 };
 
-const boardingGreen = (candidate: Candidate, rules: RepoRules): boolean => {
-  const ignored = [
-    ...rules.ignoredChecks,
-    ...(rules.candidateIgnoredChecks ?? []),
-  ];
+const runsOn = (candidate: Candidate) =>
+  latestRuns(candidate.checks).filter(
+    (run) => run.headSha === candidate.headSha
+  );
 
+const succeeded = (runs: readonly CheckRun[], name: string) =>
+  runs.some(
+    (run) =>
+      run.name === name &&
+      run.status === "completed" &&
+      (run.conclusion === "success" || run.conclusion === "neutral")
+  );
+
+const boardingIgnored = (rules: RepoRules) => [
+  ...rules.ignoredChecks,
+  ...(rules.candidateIgnoredChecks ?? []),
+];
+
+const knownRed = (candidate: Candidate, rules: RepoRules): boolean => {
+  const ignored = boardingIgnored(rules);
+
+  return runsOn(candidate).some(
+    (run) => !ignored.includes(run.name) && isFailed(run)
+  );
+};
+
+const boardingGreen = (candidate: Candidate, rules: RepoRules): boolean => {
   const required = rules.candidateRequiredChecks ?? [];
 
   if (required.length === 0) {
     return Predicate.isTagged(
-      verdictOn(candidate.headSha, candidate.checks, ignored),
+      verdictOn(candidate.headSha, candidate.checks, boardingIgnored(rules)),
       "Green"
     );
   }
 
-  const runs = latestRuns(candidate.checks).filter(
-    (run) => run.headSha === candidate.headSha
-  );
-
-  const passed = (name: string) =>
-    runs.some(
-      (run) =>
-        run.name === name &&
-        run.status === "completed" &&
-        (run.conclusion === "success" || run.conclusion === "neutral")
-    );
+  const runs = runsOn(candidate);
 
   return (
-    required.some((group) => group.length > 0 && group.every(passed)) &&
-    !runs.some((run) => !ignored.includes(run.name) && isFailed(run))
+    required.some(
+      (group) =>
+        group.length > 0 && group.every((name) => succeeded(runs, name))
+    ) && !knownRed(candidate, rules)
   );
 };
 
-export const isEligible = (candidate: Candidate, rules: RepoRules): boolean =>
+const groupSize = (pool: readonly Candidate[]) =>
+  new Set(pool.map((candidate) => candidate.number)).size;
+
+export const isLone = (pool: readonly Candidate[]): boolean =>
+  groupSize(pool) === 1;
+
+export const isEligible = (
+  candidate: Candidate,
+  rules: RepoRules,
+  lone = false
+): boolean =>
   candidate.labels.includes(rules.trainLabel) &&
   candidate.operatorReviewed &&
   (rules.requireUpToDate === false || candidate.upToDate) &&
-  boardingGreen(candidate, rules);
+  (lone ? !knownRed(candidate, rules) : boardingGreen(candidate, rules));
 
-export const selectCars = (
+const listed = (names: readonly string[]) =>
+  [...new Set(names)].toSorted().join(", ");
+
+const directGap = (
+  candidate: Candidate,
+  rules: RepoRules
+): string | undefined => {
+  const required = rules.directRequiredChecks ?? [];
+
+  if (required.length === 0) {
+    return "direct landing is off without directRequiredChecks";
+  }
+
+  if (!candidate.upToDate) {
+    return "its head does not contain main";
+  }
+
+  const verdict = verdictOn(
+    candidate.headSha,
+    candidate.checks,
+    rules.ignoredChecks
+  );
+
+  if (Predicate.isTagged(verdict, "Red")) {
+    return `its own CI is red on ${listed(verdict.failing.map((run) => run.name))}`;
+  }
+
+  if (Predicate.isTagged(verdict, "Pending")) {
+    return "its own CI has not finished";
+  }
+
+  const runs = runsOn(candidate);
+
+  const missing = required.flat().filter((name) => !succeeded(runs, name));
+
+  return missing.length === 0
+    ? undefined
+    : `its own CI has no success for ${listed(missing)}`;
+};
+
+const selectCandidates = (
   pool: readonly Candidate[],
   maxCars: number,
   rules: RepoRules,
   plan?: Plan,
   landed: ReadonlySet<string> = new Set()
-): readonly Car[] => {
+): readonly Candidate[] => {
   const seen = new Set<number>();
-  const cars: Car[] = [];
+  const lone = isLone(pool);
+  const cars: Candidate[] = [];
 
   const nodes = new Map(
     plan?.nodes.flatMap((node) =>
@@ -197,22 +269,78 @@ export const selectCars = (
       continue;
     }
 
-    if (!seen.has(candidate.number) && isEligible(candidate, rules)) {
+    if (!seen.has(candidate.number) && isEligible(candidate, rules, lone)) {
       seen.add(candidate.number);
 
       if (node !== undefined) {
         boarded.add(node.id);
       }
 
-      cars.push({
-        headSha: candidate.headSha,
-        number: candidate.number,
-        owner: candidate.owner,
-      });
+      cars.push(candidate);
     }
   }
 
   return cars;
+};
+
+const carOf = ({ headSha, number, owner }: Candidate): Car => ({
+  headSha,
+  number,
+  owner,
+});
+
+export const selectCars = (
+  pool: readonly Candidate[],
+  maxCars: number,
+  rules: RepoRules,
+  plan?: Plan,
+  landed: ReadonlySet<string> = new Set()
+): readonly Car[] =>
+  selectCandidates(pool, maxCars, rules, plan, landed).map(carOf);
+
+export interface Departure {
+  readonly cars: readonly Car[];
+  readonly path: DeparturePath;
+  readonly reason: string;
+}
+
+export const departure = (
+  pool: readonly Candidate[],
+  maxCars: number,
+  rules: RepoRules,
+  plan?: Plan,
+  landed: ReadonlySet<string> = new Set()
+): Departure | undefined => {
+  const boarding = selectCandidates(pool, maxCars, rules, plan, landed);
+  const cars = boarding.map(carOf);
+  const [lead] = boarding;
+
+  if (lead === undefined) {
+    return undefined;
+  }
+
+  if (!isLone(pool)) {
+    return {
+      cars,
+      path: "train",
+      reason: `${cars.length} of ${groupSize(pool)} cars in the group passed light-done boarding; a shared train waits for each car's own CI`,
+    };
+  }
+
+  const gap = directGap(lead, rules);
+
+  return gap === undefined
+    ? {
+        cars,
+        path: "direct-land",
+        reason:
+          "it rides alone, its head contains main and its own CI is green on every direct check group",
+      }
+    : {
+        cars,
+        path: "lone-board",
+        reason: `it rides alone, so boarding skips the wait for its own CI; it takes a train because ${gap}`,
+      };
 };
 
 export const suspectOrder = (
