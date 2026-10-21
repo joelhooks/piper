@@ -46,9 +46,10 @@ Both machines append intents to an outbox and facts to a ledger. An external exe
 | `packages/core/src/release.ts` | Release lifecycle |
 | `packages/core/src/release-host.ts` | Scoped release creation, restoration, stepping, and inspection |
 | `packages/core/src/config.ts` | `PiperConfigSchema`, `definePiperConfig` and `decodePiperConfig`: one typed home for a repository's settings |
-| `packages/core/src/glob.ts` | The deploy-path glob grammar and matcher: `**`, `*` and `{a,b}` over repository-relative paths |
+| `packages/core/src/glob.ts` | The glob grammar and matcher shared by deploy path rules and check scopes: `**`, `*` and `{a,b}` over repository-relative paths |
 | `packages/core/src/deploy-paths.ts` | `deployable`: the deploy verdict for a change set, with the rule or default that decided each path |
-| `packages/core/src/schema-paths.ts` | The path-only schema issue extractor shared by the config, train and release decoders |
+| `packages/core/src/accept.ts` | `checkRequired` and `accepted`: which observe checks a diff requires, and whether a release's verdict rows accept it |
+| `packages/core/src/schema-paths.ts` | Schema issue extractors: the paths shared by the config, train and release decoders, and the config decoder's authored reasons |
 
 The host helpers are storage-independent. They restore with `createEffectActor(machine, { snapshot })`, deliver events, and wait for a mailbox barrier before returning a persisted snapshot. Deadlines and poll times live in context. An integration reads the next alarm time and posts a `tick`; there are no process-local timers to restore.
 
@@ -56,7 +57,7 @@ Repository settings are explicit inputs: `trainLabel`, `ignoredChecks`, and `agg
 
 ## Repository configuration
 
-`@joelhooks/piper/config` gives each repository's settings one typed home. A repository writes `piper.config.ts` with `definePiperConfig`, which only types the object. `decodePiperConfig(value)` decodes it with `PiperConfigSchema` and fills the defaults. It rejects unknown keys at every level. A failure is a `PiperConfigError` that lists every bad path, sorted, and never the rejected value. [`packages/core/examples/piper.config.ts`](packages/core/examples/piper.config.ts) configures a fictional `acme/shop` with three Workers.
+`@joelhooks/piper/config` gives each repository's settings one typed home. A repository writes `piper.config.ts` with `definePiperConfig`, which only types the object. `decodePiperConfig(value)` decodes it with `PiperConfigSchema` and fills the defaults. It rejects unknown keys at every level. A failure is a `PiperConfigError` that lists every bad path, sorted, and never the rejected value. When a failed rule states its own reason, such as an empty check scope, the message adds that reason after the paths. [`packages/core/examples/piper.config.ts`](packages/core/examples/piper.config.ts) configures a fictional `acme/shop` with three Workers.
 
 | Section | Fields and defaults |
 | --- | --- |
@@ -64,7 +65,7 @@ Repository settings are explicit inputs: `trainLabel`, `ignoredChecks`, and `agg
 | `mergeLine` | `approval` says where GO rows come from: `{ _tag: "File", path }`. `labels.train` (`train`), `labels.hold` (`hold`) and `labels.fullCi` (`full-ci`) must differ. `checks.train`, `checks.direct`, `checks.ignored` and `checks.ignoredAtBoarding` are core's `candidateRequiredChecks`, `directRequiredChecks`, `ignoredChecks` and `candidateIgnoredChecks`; each defaults to empty. `maxCars` defaults to 8, `pollMs` to 90 seconds, `ciTimeoutMs` to one hour and `requireUpToDate` to true. These four reuse core's train input schemas, so the ten-second poll floor is the same rule. `excluded` lists PR numbers and defaults to none. |
 | `deploy` | `paths` holds ordered `rules`, each `{ glob, deploy }`, and a `default` of `"deploy"` or `"skip"`. Rules default to none and the default to `"deploy"`; see [deploy path rules](#deploy-path-rules). `migrations` defaults to none. `codeOnly` defaults to true. `ship` is `{ _tag: "Command", command, args }` or `{ _tag: "Workflow", workflow, ref }`. `lock` and `prep` are optional commands. `reviewCriteria` is an optional `{ _tag: "File", path }`. Paths are relative to the repository root and contain no `..`. |
 | `units` | Deployable Workers: a logical `name`, a Worker `script`, and `primary` and `scheduled`, both false by default. Names and scripts are distinct. At most one unit is primary. |
-| `observe` | `checks` lists `{ name, onFail: "escalate" \| "restore" \| "alarm" }` with distinct names. `cadence` defaults to `minMs` 15 seconds and `maxMs` 15 minutes; `minMs` cannot exceed `maxMs`. `timeoutMs` is required. The optional `canary` is `{ url, secret }` with an https URL. |
+| `observe` | `checks` lists `{ name, onFail: "escalate" \| "restore" \| "alarm", scope? }` with distinct names. `scope` is an optional non-empty list of globs; see [release acceptance](#release-acceptance). `cadence` defaults to `minMs` 15 seconds and `maxMs` 15 minutes; `minMs` cannot exceed `maxMs`. `timeoutMs` is required. The optional `canary` is `{ url, secret }` with an https URL. |
 | `alarms` | Alarm-only signals: `StartupCpuJump { unit, ratio }` against the last release, and `OutsideWindows { timeZone, windows }`. No alarm can refuse a release. The type has no refusing variant or field. |
 | `contacts` | `owner` is required. `alerts` and `cc` default to none, and `sender` to `Piper`. |
 
@@ -92,7 +93,32 @@ Globs match whole repository-relative paths, case-sensitively. `*` matches any r
 
 `deployable(config.deploy.paths, changedPaths)` from `@joelhooks/piper/deploy-paths` returns `{ deploy, decisions }`. Each decision explains one path: `{ _tag: "Rule", path, deploy, index, glob }` names the rule that decided it, and `{ _tag: "Default", path, deploy }` says no rule matched. The function is pure.
 
-Today only the train admission reads a config, through `trainAdmission` in `@joelhooks/piper-executor/train-config`. See [the train admission contract](packages/executor/TRAIN.md). `deployable` evaluates `deploy.paths`, but no driver calls it yet. The rest of the deploy section and the units, observe, alarms and contacts sections are typed for later steps.
+### Release acceptance
+
+A new release may fire only once its predecessor is accepted. `accepted(config.observe.checks, verdicts, changedPaths)` from `@joelhooks/piper/accept` decides that from the verdict rows recorded for the predecessor's sha. A verdict is `{ check, outcome, note }`, where `outcome` is `PASS`, `FAIL`, `OVERRIDE` or `ALARM`. A required check counts once it has a `PASS` row, or an `OVERRIDE` row whose note does not start with `piper:`, so Piper cannot override itself. `ALARM` rows never count. Rows for unlisted checks are ignored.
+
+A check without a `scope` is always required. A scoped check is required only when the predecessor's diff, from its previous sha to its sha, touches a path that one of its globs matches. Scope globs use the [deploy path grammar](#deploy-path-rules). Scope a slow check whose verdict only matters when a release touches the code it tests:
+
+```ts
+checks: [
+  { name: "readback", onFail: "restore" },
+  { name: "jobs", onFail: "escalate", scope: ["{jobs,scheduler}/**"] },
+],
+```
+
+The scoped check still runs on every release. When the diff doesn't require it, its verdict is telemetry, and a `FAIL` does not refuse. Pass the diff as `{ _tag: "Known", paths }`, or as `{ _tag: "Unread" }` when it can't be read. An unread diff requires every check. An empty `scope` fails to decode, because it would never require the check; drop `scope` to require the check always.
+
+`checkRequired(check, changedPaths)` returns `{ required, matched }`. `matched` lists each `{ path, glob }` pair that made a scoped check required. It is empty for an unscoped check or an unread diff.
+
+`accepted` returns a tagged result:
+
+- `Refused { failed }` when a required check has a `FAIL` row and no row that counts. Each entry names the check and its `FAIL` notes.
+- Otherwise `Waiting { waiting }` when a required check has no row that counts. Each entry names the check.
+- Otherwise `Accepted { reasons }`, with one reason per check: `Passed`, `Overridden` with the override's note, or `NotRequired`. A `PASS` row wins over an override.
+
+Every entry for a required check carries its `matched` pairs. Both functions are pure, so a later call with more rows can turn `Waiting` or `Refused` into `Accepted`.
+
+Today only the train admission reads a config, through `trainAdmission` in `@joelhooks/piper-executor/train-config`. See [the train admission contract](packages/executor/TRAIN.md). `deployable` evaluates `deploy.paths` and `accepted` evaluates `observe.checks`, but no driver calls either yet. The rest of the deploy section and the units, observe, alarms and contacts sections are typed for later steps.
 
 ## Packages
 

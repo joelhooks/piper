@@ -1,4 +1,4 @@
-import { Effect, flow, Schema } from "effect";
+import { Array as Arr, Effect, flow, Schema } from "effect";
 
 import { CiTimeoutMs, MaxCars, PollMs, PrNumber } from "./domain.js";
 import { isGlob } from "./glob.js";
@@ -8,7 +8,7 @@ import {
   DEFAULT_POLL_MS,
   DEFAULT_TRAIN_LABEL,
 } from "./policy.js";
-import { schemaIssuePaths } from "./schema-paths.js";
+import { schemaIssuePaths, schemaIssueReasons } from "./schema-paths.js";
 
 const credentialPatterns: readonly RegExp[] = [
   /\b(?:gh[oprsu]|github_pat)_[A-Za-z0-9_]{16,}/u,
@@ -219,10 +219,20 @@ const Cadence = Schema.Struct({
   )
 );
 
-const ObserveCheck = Schema.Struct({
+const Scope = Schema.Array(Glob).pipe(
+  Schema.refine(Arr.isReadonlyArrayNonEmpty, {
+    message:
+      "is empty, so the check would never be required; drop scope to require the check always",
+  })
+);
+
+export const ObserveCheckSchema = Schema.Struct({
   name: Text,
   onFail: Schema.Literals(["alarm", "escalate", "restore"]),
+  scope: Schema.optionalKey(Scope),
 });
+
+export type ObserveCheck = typeof ObserveCheckSchema.Type;
 
 const Observe = Schema.Struct({
   cadence: orDefault(Cadence, {}),
@@ -236,7 +246,7 @@ const Observe = Schema.Struct({
       ),
     })
   ),
-  checks: Schema.NonEmptyArray(ObserveCheck).check(distinctBy("name")),
+  checks: Schema.NonEmptyArray(ObserveCheckSchema).check(distinctBy("name")),
   timeoutMs: PositiveMs,
 });
 
@@ -318,13 +328,24 @@ export class PiperConfigError extends Schema.TaggedError<
   paths: Schema.Array(Schema.String),
 }) {}
 
+const named = (path: string) => (path === "" ? "the configuration root" : path);
+
 const invalidAt = (cause: Schema.SchemaError) => {
-  const paths = schemaIssuePaths(cause).map((path) =>
-    path === "" ? "the configuration root" : path
-  );
+  const paths = schemaIssuePaths(cause).map(named);
+
+  const reasons = [
+    ...new Set(
+      schemaIssueReasons(cause).map(
+        ({ path, reason }) => `${named(path)} ${reason}`
+      )
+    ),
+  ].toSorted();
 
   return new PiperConfigError({
-    message: `Piper configuration is invalid at ${paths.join(", ")}`,
+    message: [
+      `Piper configuration is invalid at ${paths.join(", ")}`,
+      ...reasons,
+    ].join(". "),
     paths,
   });
 };

@@ -167,6 +167,11 @@ describe("PiperConfig", () => {
       expect(config.observe.canary?.secret).toEqual(
         SecretRefSchema.cases.Env.make({ name: "SHOP_CANARY_TOKEN" })
       );
+      expect(config.observe.checks.at(-1)).toEqual({
+        name: "jobs",
+        onFail: "escalate",
+        scope: ["{jobs,scheduler}/**"],
+      });
     })
   );
 
@@ -367,24 +372,29 @@ describe("unknown keys", () => {
   );
 });
 
-describe("deploy path globs", () => {
-  const glob = ["deploy", "paths", "rules", 0, "glob"];
+describe("deploy path and check scope globs", () => {
+  const globs = [
+    ["deploy", "paths", "rules", 0, "glob"],
+    ["observe", "checks", 3, "scope", 0],
+  ];
 
   it.effect("accept repository-relative **, * and {a,b} globs", () =>
     Effect.gen(function* accepted() {
-      for (const candidate of [
-        "**",
-        "src/**",
-        "**/*.md",
-        ".github/**",
-        "apps/*/src/**",
-        "*.{test,spec}.*",
-        "{skills/*/SKILL.md,prompts/*.md}",
-        "{a,{b,c}}/**",
-        "wrangler{.toml,}",
-        "apps/web/app/(shop)/**",
-      ]) {
-        expect(yield* pathsOf(set(json, glob, candidate))).toEqual([]);
+      for (const glob of globs) {
+        for (const candidate of [
+          "**",
+          "src/**",
+          "**/*.md",
+          ".github/**",
+          "apps/*/src/**",
+          "*.{test,spec}.*",
+          "{skills/*/SKILL.md,prompts/*.md}",
+          "{a,{b,c}}/**",
+          "wrangler{.toml,}",
+          "apps/web/app/(shop)/**",
+        ]) {
+          expect(yield* pathsOf(set(json, glob, candidate))).toEqual([]);
+        }
       }
     })
   );
@@ -409,10 +419,51 @@ describe("deploy path globs", () => {
         "src/[ab].ts",
         "src\\*.ts",
       ]) {
-        expect(yield* pathsOf(set(json, glob, candidate))).toEqual([
-          "deploy.paths.rules.0.glob",
-        ]);
+        for (const glob of globs) {
+          expect(yield* pathsOf(set(json, glob, candidate))).toEqual([
+            dotted(glob),
+          ]);
+        }
       }
+    })
+  );
+
+  it.effect("reject an empty scope and name the fix", () =>
+    Effect.gen(function* emptyScope() {
+      const scope = ["observe", "checks", 3, "scope"];
+
+      expect(yield* rejection(set(json, scope, []))).toEqual({
+        message:
+          "Piper configuration is invalid at observe.checks.3.scope. observe.checks.3.scope is empty, so the check would never be required; drop scope to require the check always",
+        paths: ["observe.checks.3.scope"],
+      });
+    })
+  );
+});
+
+describe("error messages", () => {
+  it.effect("add each failed rule's own reason after the paths", () =>
+    Effect.gen(function* reasons() {
+      const candidate = set(
+        set(
+          set(json, ["units", 1, "name"], "storefront"),
+          ["repo", "owner"],
+          ""
+        ),
+        ["observe", "checks", 3, "scope"],
+        []
+      );
+
+      expect((yield* rejection(candidate)).message).toBe(
+        [
+          "Piper configuration is invalid at observe.checks.3.scope, repo.owner, units.1.name",
+          "observe.checks.3.scope is empty, so the check would never be required; drop scope to require the check always",
+          "units.1.name repeats an earlier name",
+        ].join(". ")
+      );
+      expect((yield* rejection(set(json, ["repo", "owner"], ""))).message).toBe(
+        "Piper configuration is invalid at repo.owner"
+      );
     })
   );
 });
