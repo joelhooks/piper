@@ -131,7 +131,6 @@ const stringLeaves = nodes(json).filter((node) =>
 const minimal = definePiperConfig({
   contacts: { owner: "release-owner@shop.example" },
   deploy: {
-    paths: { include: ["src/**"] },
     ship: ShipPortSchema.cases.Command.make({ args: [], command: "pnpm" }),
   },
   mergeLine: {
@@ -186,7 +185,7 @@ describe("PiperConfig", () => {
         deploy: {
           codeOnly: true,
           migrations: [],
-          paths: { exclude: [], include: ["src/**"] },
+          paths: { default: "deploy", rules: [] },
           ship: ShipPortSchema.cases.Command.make({
             args: [],
             command: "pnpm",
@@ -368,6 +367,56 @@ describe("unknown keys", () => {
   );
 });
 
+describe("deploy path globs", () => {
+  const glob = ["deploy", "paths", "rules", 0, "glob"];
+
+  it.effect("accept repository-relative **, * and {a,b} globs", () =>
+    Effect.gen(function* accepted() {
+      for (const candidate of [
+        "**",
+        "src/**",
+        "**/*.md",
+        ".github/**",
+        "apps/*/src/**",
+        "*.{test,spec}.*",
+        "{skills/*/SKILL.md,prompts/*.md}",
+        "{a,{b,c}}/**",
+        "wrangler{.toml,}",
+        "apps/web/app/(shop)/**",
+      ]) {
+        expect(yield* pathsOf(set(json, glob, candidate))).toEqual([]);
+      }
+    })
+  );
+
+  it.effect("reject globs that would not mean what they say", () =>
+    Effect.gen(function* rejected() {
+      for (const candidate of [
+        "/srv/app/**",
+        "docs/",
+        "docs//x.md",
+        "./docs/**",
+        "docs/../src/**",
+        "{docs,..}/**",
+        "src**",
+        "**.md",
+        "a/***/b",
+        "{docs,src",
+        "docs}/**",
+        "{,docs}/**",
+        "!docs/**",
+        "src/?.ts",
+        "src/[ab].ts",
+        "src\\*.ts",
+      ]) {
+        expect(yield* pathsOf(set(json, glob, candidate))).toEqual([
+          "deploy.paths.rules.0.glob",
+        ]);
+      }
+    })
+  );
+});
+
 describe("guards", () => {
   it.effect("name the exact path of each refused setting", () =>
     Effect.gen(function* guards() {
@@ -418,8 +467,12 @@ describe("guards", () => {
           "observe.checks.0.onFail",
         ],
         [
-          set(json, ["deploy", "paths", "include", 0], "/srv/app/**"),
-          "deploy.paths.include.0",
+          set(json, ["deploy", "paths", "rules", 0, "glob"], "/srv/app/**"),
+          "deploy.paths.rules.0.glob",
+        ],
+        [
+          set(json, ["deploy", "paths", "default"], "include"),
+          "deploy.paths.default",
         ],
         [
           set(json, ["deploy", "migrations", 0], "../db"),

@@ -26,8 +26,13 @@ export default definePiperConfig({
     lock: { args: ["release:lock"], command: "pnpm" },
     migrations: ["db/migrations"],
     paths: {
-      exclude: ["**/*.md", "docs/**"],
-      include: ["apps/**", "packages/**", "wrangler.toml"],
+      default: "deploy",
+      rules: [
+        { deploy: true, glob: "**/{package.json,pnpm-lock.yaml}" },
+        { deploy: false, glob: "{docs,.github}/**" },
+        { deploy: false, glob: "**/{test,tests}/**" },
+        { deploy: false, glob: "**/*.{md,test.ts}" },
+      ],
     },
     prep: { args: ["release:prep"], command: "pnpm" },
     reviewCriteria: ReviewSourceSchema.cases.File.make({

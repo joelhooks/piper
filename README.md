@@ -46,6 +46,8 @@ Both machines append intents to an outbox and facts to a ledger. An external exe
 | `packages/core/src/release.ts` | Release lifecycle |
 | `packages/core/src/release-host.ts` | Scoped release creation, restoration, stepping, and inspection |
 | `packages/core/src/config.ts` | `PiperConfigSchema`, `definePiperConfig` and `decodePiperConfig`: one typed home for a repository's settings |
+| `packages/core/src/glob.ts` | The deploy-path glob grammar and matcher: `**`, `*` and `{a,b}` over repository-relative paths |
+| `packages/core/src/deploy-paths.ts` | `deployable`: the deploy verdict for a change set, with the rule or default that decided each path |
 | `packages/core/src/schema-paths.ts` | The path-only schema issue extractor shared by the config, train and release decoders |
 
 The host helpers are storage-independent. They restore with `createEffectActor(machine, { snapshot })`, deliver events, and wait for a mailbox barrier before returning a persisted snapshot. Deadlines and poll times live in context. An integration reads the next alarm time and posts a `tick`; there are no process-local timers to restore.
@@ -60,7 +62,7 @@ Repository settings are explicit inputs: `trainLabel`, `ignoredChecks`, and `agg
 | --- | --- |
 | `repo` | `owner`, `name` and `base`. The base branch has no default, as in the train admission. |
 | `mergeLine` | `approval` says where GO rows come from: `{ _tag: "File", path }`. `labels.train` (`train`), `labels.hold` (`hold`) and `labels.fullCi` (`full-ci`) must differ. `checks.train`, `checks.direct`, `checks.ignored` and `checks.ignoredAtBoarding` are core's `candidateRequiredChecks`, `directRequiredChecks`, `ignoredChecks` and `candidateIgnoredChecks`; each defaults to empty. `maxCars` defaults to 8, `pollMs` to 90 seconds, `ciTimeoutMs` to one hour and `requireUpToDate` to true. These four reuse core's train input schemas, so the ten-second poll floor is the same rule. `excluded` lists PR numbers and defaults to none. |
-| `deploy` | `paths.include` is required; `paths.exclude` and `migrations` default to none. `codeOnly` defaults to true. `ship` is `{ _tag: "Command", command, args }` or `{ _tag: "Workflow", workflow, ref }`. `lock` and `prep` are optional commands. `reviewCriteria` is an optional `{ _tag: "File", path }`. Paths are relative to the repository root and contain no `..`. |
+| `deploy` | `paths` holds ordered `rules`, each `{ glob, deploy }`, and a `default` of `"deploy"` or `"skip"`. Rules default to none and the default to `"deploy"`; see [deploy path rules](#deploy-path-rules). `migrations` defaults to none. `codeOnly` defaults to true. `ship` is `{ _tag: "Command", command, args }` or `{ _tag: "Workflow", workflow, ref }`. `lock` and `prep` are optional commands. `reviewCriteria` is an optional `{ _tag: "File", path }`. Paths are relative to the repository root and contain no `..`. |
 | `units` | Deployable Workers: a logical `name`, a Worker `script`, and `primary` and `scheduled`, both false by default. Names and scripts are distinct. At most one unit is primary. |
 | `observe` | `checks` lists `{ name, onFail: "escalate" \| "restore" \| "alarm" }` with distinct names. `cadence` defaults to `minMs` 15 seconds and `maxMs` 15 minutes; `minMs` cannot exceed `maxMs`. `timeoutMs` is required. The optional `canary` is `{ url, secret }` with an https URL. |
 | `alarms` | Alarm-only signals: `StartupCpuJump { unit, ratio }` against the last release, and `OutsideWindows { timeZone, windows }`. No alarm can refuse a release. The type has no refusing variant or field. |
@@ -68,7 +70,29 @@ Repository settings are explicit inputs: `trainLabel`, `ignoredChecks`, and `agg
 
 Secrets are references, never values. `SecretRefSchema` accepts `{ _tag: "Env", name }`, `{ _tag: "Store", store, name }` or `{ _tag: "CloudflareSecret", name }`. Every free-text field rejects text that looks like an inline credential. That covers known token prefixes, private-key blocks, JWTs, bearer headers, passwords in URLs, `token=`-style assignments and long mixed-case alphanumeric runs. Build tagged values with their schema, for example `SecretRefSchema.cases.Env.make({ name: "SHOP_CANARY_TOKEN" })`.
 
-Today only the train admission reads a config, through `trainAdmission` in `@joelhooks/piper-executor/train-config`. See [the train admission contract](packages/executor/TRAIN.md). The deploy, units, observe, alarms and contacts sections are typed for later steps.
+### Deploy path rules
+
+`deploy.paths` decides whether a change set needs a deploy. Each changed path takes the verdict of the first rule whose glob matches it. A path that no rule matches takes the `default`. The change set deploys when any path deploys; an empty change set does not. Rule order matters: put files that count despite looking inert, such as package manifests or bundled prompts, before the broad rules that skip their directories.
+
+```ts
+paths: {
+  default: "deploy",
+  rules: [
+    { deploy: true, glob: "**/{package.json,pnpm-lock.yaml}" },
+    { deploy: false, glob: "{docs,.github}/**" },
+    { deploy: false, glob: "**/{test,tests}/**" },
+    { deploy: false, glob: "**/*.{md,test.ts}" },
+  ],
+},
+```
+
+The default is `"deploy"` because a missed deploy leaves production stale, while an extra deploy of identical code only costs time.
+
+Globs match whole repository-relative paths, case-sensitively. `*` matches any run of characters within one path segment. `**` is a whole segment that matches zero or more segments, so `docs/**` matches `docs/a.md` and `**/tests/**` matches `tests/a.ts` at any depth. `{a,b}` matches either alternative; alternatives may hold `/`, nest, or be empty, as in `wrangler{.toml,}`. Both wildcards match names that start with a dot. Every other character is literal. The decoder rejects a glob that would not mean what it says: a leading or trailing `/`, an empty, `.` or `..` segment, `**` inside a segment, unbalanced braces, and the characters `!`, `?`, `[`, `]` and `\`, which other glob dialects treat as syntax.
+
+`deployable(config.deploy.paths, changedPaths)` from `@joelhooks/piper/deploy-paths` returns `{ deploy, decisions }`. Each decision explains one path: `{ _tag: "Rule", path, deploy, index, glob }` names the rule that decided it, and `{ _tag: "Default", path, deploy }` says no rule matched. The function is pure.
+
+Today only the train admission reads a config, through `trainAdmission` in `@joelhooks/piper-executor/train-config`. See [the train admission contract](packages/executor/TRAIN.md). `deployable` evaluates `deploy.paths`, but no driver calls it yet. The rest of the deploy section and the units, observe, alarms and contacts sections are typed for later steps.
 
 ## Packages
 
