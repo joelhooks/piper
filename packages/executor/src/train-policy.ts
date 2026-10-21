@@ -4,6 +4,7 @@ import type { TrainContext } from "@joelhooks/piper/train";
 import { Data } from "effect";
 import type { Schema } from "effect";
 
+import type { ExecutorError } from "./domain.js";
 import { schemaIssuePaths } from "./schema-paths.js";
 import type { TrainAdmission, TrainStop } from "./train-domain.js";
 
@@ -107,6 +108,24 @@ export const admittedIntent = (
     stop: "intent outside admission",
   });
 };
+
+export const failedStop = (
+  intent: Intent,
+  error: ExecutorError | undefined
+): TrainStop =>
+  intent.kind === "MarkReady"
+    ? stops.ReadyFailed({
+        detail: error,
+        harm: "merging a draft pull request, which the provider refuses",
+        next: `mark #${intent.pr} ready for review, then merge it at the tested head or admit a new train`,
+        stop: "MarkReady failed",
+      })
+    : stops.ExecutionFailed({
+        detail: error,
+        harm: "continuing after an unsuccessful or ambiguous operation",
+        next: "hand back; inspect the code and message before deciding on writes",
+        stop: `${intent.kind} failed`,
+      });
 
 export const rerunFaults = (
   checks: readonly CheckRun[],

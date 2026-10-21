@@ -349,6 +349,10 @@ describe("lone car fast paths", () => {
           for (const merge of fresh.filter(
             (intent) => intent.kind === "Merge"
           )) {
+            expect(fresh).toEqual([
+              expect.objectContaining({ kind: "MarkReady", pr: CAR }),
+              merge,
+            ]);
             expect(merge).toMatchObject({ matchHead: HEAD, pr: CAR });
             expect(event).toMatchObject({ head: HEAD, type: "go" });
             expect(stateName(before)).toBe("direct.awaitingGo");

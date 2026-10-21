@@ -36,7 +36,7 @@ The admitted car is alone in its candidate pool, so it boards on push: absent an
 
 `tokenCommand` is trusted operator configuration. The runner executes it through `sh -c` when a GitHub request needs a token. Only stdout supplies the token. Empty output and nonzero exits fail closed. Do not put token values in admission files. Command stderr, command text and token output are not copied into failure records.
 
-Live mode requires `PIPER_LIVE_ADMITTED_REPO` to equal `repo` exactly. Refusal happens before token execution or provider reads. Dry-run still reads GitHub, but uses a writer that dies on use. It records the proposed build, or the proposed direct merge, and exits before any later intent.
+Live mode requires `PIPER_LIVE_ADMITTED_REPO` to equal `repo` exactly. Refusal happens before token execution or provider reads. Dry-run still reads GitHub, but uses a writer that dies on use. It records the proposed build, or the proposed direct merge and the ready-mark a draft car needs before it, and exits before any later intent.
 
 ## Lifecycle and stops
 
@@ -44,11 +44,11 @@ The runner machine uses `setupEffect` and starts through `createEffectActor`. Pr
 
 The graph carries departure, build and drain progress. Context holds admission, the persisted core train, seen IDs, the conservative write count and any refusal. It has no lifecycle flags. Observations carry the drained intent kind and restored core snapshot into explicit transitions. One `Schedule.spaced` supplies the riding poll interval; boarding and draining have no clock.
 
-Allowed intents are `BuildTrain`, `OpenTrainPr`, `PollChecks`, `MarkReady`, `Merge`, `RemoveLabels` and `RerunChecks`. A build must target `train/<train>` and contain exactly the admitted car and head. A merge of the admitted car's own pull request must match its reviewed head. Other intents stop this train.
+Allowed intents are `BuildTrain`, `OpenTrainPr`, `PollChecks`, `MarkReady`, `Merge`, `RemoveLabels` and `RerunChecks`. A build must target `train/<train>` and contain exactly the admitted car and head. A merge of the admitted car's own pull request must match its reviewed head. Other intents stop this train. Both landings mark the pull request ready for review right before its merge, because GitHub refuses to merge a draft. `MarkReady` writes only when the pull request is still a draft.
 
 A rerun requires a fresh GitHub observation of at least one finished, non-green, non-ignored check on the train head. Every such failure must be `cancelled`, `startup_failure` or `stale`. The fresh read matters: core clears its checks when emitting a rerun intent.
 
-Every refusal is a `TrainStopSchema` variant with required `harm`, `next`, `stop` and `detail`. Moved heads need a new admission. A moved base needs a new train. Missing, failing and pending boarding checks produce different next actions. Failed executor outcomes preserve `detail.code` and `detail.message`. Expected failures become a stopped result; defects remain defects.
+Every refusal is a `TrainStopSchema` variant with required `harm`, `next`, `stop` and `detail`. Moved heads need a new admission. A moved base needs a new train. Missing, failing and pending boarding checks produce different next actions. Failed executor outcomes preserve `detail.code` and `detail.message`. A failed ready-mark stops as `ReadyFailed` before any merge and names the pull request to mark ready by hand. Expected failures become a stopped result; defects remain defects.
 
 ## State and handback
 
@@ -79,11 +79,11 @@ An existing state with `writes > 0` always refuses automatic resumption: harm `d
 | Stop | `at`, `stop`, `detail`, `head`, `pr`, `state`, `writes`, `harm`, `next` |
 | Exit | `exit` (reason string) |
 
-`at` is an ISO timestamp except inside executor events, where it remains milliseconds. Undefined `cars`, `head`, `pr` and `runId` fields are omitted by JSON. `events` use core's posted train-event union. Rerun faults contain `conclusion`, `name` and optional `runId`. `harm` and `next` are additions to stop records; existing fields keep their names. A departure record names the path the core train chose and why. A `car not boarded` stop names the boarding path in `detail.path`. A direct landing has no `BuildTrain` or `OpenTrainPr` records; its `Merge` targets the car's own pull request. Successful trains emit an exit record without a refusal record.
+`at` is an ISO timestamp except inside executor events, where it remains milliseconds. Undefined `cars`, `head`, `pr` and `runId` fields are omitted by JSON. `events` use core's posted train-event union. Rerun faults contain `conclusion`, `name` and optional `runId`. `harm` and `next` are additions to stop records; existing fields keep their names. A departure record names the path the core train chose and why. A `car not boarded` stop names the boarding path in `detail.path`. A direct landing has no `BuildTrain` or `OpenTrainPr` records; its `MarkReady` and `Merge` target the car's own pull request. Successful trains emit an exit record without a refusal record.
 
 ## Test evidence
 
-The runner has 44 tests, including a generated rerun-safety property. A live actor trace asserts every reachable leaf state across landed, rehearsed, refused and direct runs. A failed dry build must stop rather than enter the rehearsal final state. All fixtures are synthetic. Mutation receipts belong to the delivery packet, not the public source tree.
+The runner has 46 tests, including a generated rerun-safety property. A live actor trace asserts every reachable leaf state across landed, rehearsed, refused and direct runs. A failed dry build must stop rather than enter the rehearsal final state. All fixtures are synthetic. Mutation receipts belong to the delivery packet, not the public source tree.
 
 ## Library
 

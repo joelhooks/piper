@@ -13,7 +13,7 @@ import {
 } from "../src/train-policy.js";
 import { TrainStore } from "../src/train-store.js";
 import { runTrain } from "../src/train.js";
-import { admission, finish, fixture } from "./train-fixture.js";
+import { admission, direct, finish, fixture } from "./train-fixture.js";
 
 const refusal = (
   stop: TrainStop | undefined,
@@ -516,36 +516,42 @@ describe("train refusals", () => {
     });
   }
 
-  it.effect(
-    "returns failed operation code and message without further writes",
-    () =>
-      Effect.gen(function* executionFailure() {
-        const test = yield* fixture();
-        test.github.controls.graphqlErrors = true;
+  for (const [path, admitted, pr] of [
+    ["train", admission, 3],
+    ["direct", direct, admission.car.number],
+  ] as const) {
+    it.effect(
+      `stops a failed ready-mark on the ${path} path with its code and message, before merging a draft`,
+      () =>
+        Effect.gen(function* readyFailure() {
+          const test = yield* fixture();
+          test.github.controls.drafts = [admission.car.number];
+          test.github.controls.graphqlErrors = true;
 
-        const result = yield* finish(
-          runTrain(admission).pipe(Effect.provide(test.layer))
-        );
+          const result = yield* finish(
+            runTrain(admitted).pipe(Effect.provide(test.layer))
+          );
 
-        refusal(
-          result.stop,
-          "ExecutionFailed",
-          "continuing after an unsuccessful or ambiguous operation",
-          "hand back; inspect the code and message before deciding on writes"
-        );
-        expect(result.exit).toBe("MarkReady failed");
-        expect(result.stop?.detail).toMatchObject({
-          code: "provider",
-          message: "GraphQL errors: Resource not accessible by integration",
-        });
-        expect(result.writes).toBe((yield* test.store.state)?.writes);
-        expect(
-          test.github.writes.some((operation) =>
-            operation.path.endsWith("/merge")
-          )
-        ).toBe(false);
-      })
-  );
+          refusal(
+            result.stop,
+            "ReadyFailed",
+            "merging a draft pull request, which the provider refuses",
+            `mark #${pr} ready for review, then merge it at the tested head or admit a new train`
+          );
+          expect(result.exit).toBe("MarkReady failed");
+          expect(result.stop?.detail).toMatchObject({
+            code: "provider",
+            message: "GraphQL errors: Resource not accessible by integration",
+          });
+          expect(result.writes).toBe((yield* test.store.state)?.writes);
+          expect(
+            test.github.writes.some((operation) =>
+              operation.path.endsWith("/merge")
+            )
+          ).toBe(false);
+        })
+    );
+  }
 
   it.effect("stops at a provider merge refusal", () =>
     Effect.gen(function* mergeRefused() {

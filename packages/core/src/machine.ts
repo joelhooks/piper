@@ -194,13 +194,14 @@ const startTesting = (context: TrainContext, at: number): TrainContext => ({
 const accept = (
   context: TrainContext,
   go: { readonly at: number; readonly by: string; readonly head: string },
-  ...drafts: readonly IntentDraft[]
+  pr: number
 ): TrainContext =>
   record(
     emit(
       { ...context, go: { at: go.at, by: go.by, head: go.head } },
       go.at,
-      ...drafts
+      { kind: "MarkReady", pr },
+      { kind: "Merge", matchHead: go.head, pr }
     ),
     { at: go.at, by: go.by, head: go.head, kind: "go" }
   );
@@ -894,11 +895,7 @@ export const trainMachine = setupEffect({
               }
 
               return {
-                context: accept(context, event, {
-                  kind: "Merge",
-                  matchHead: event.head,
-                  pr: car.number,
-                }),
+                context: accept(context, event, car.number),
                 target: "merging",
               };
             },
@@ -987,12 +984,7 @@ export const trainMachine = setupEffect({
               }
 
               return {
-                context: accept(
-                  context,
-                  event,
-                  { kind: "MarkReady", pr: context.pr },
-                  { kind: "Merge", matchHead: event.head, pr: context.pr }
-                ),
+                context: accept(context, event, context.pr),
                 target: "merging",
               };
             },
