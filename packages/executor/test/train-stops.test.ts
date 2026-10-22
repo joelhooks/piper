@@ -363,6 +363,52 @@ describe("train refusals", () => {
     );
   }
 
+  it.effect(
+    "gives a shared car under notKnownRed red advice, never base-merge advice",
+    () =>
+      Effect.gen(function* sharedRed() {
+        const input = {
+          ...admission.input,
+          sharedBoarding: "notKnownRed" as const,
+        };
+
+        const candidate = {
+          checks: [
+            { ...completed("failure", admission.car.headSha), name: "lint" },
+          ],
+          headSha: admission.car.headSha,
+          labels: [admission.input.trainLabel],
+          number: admission.car.number,
+          operatorReviewed: true,
+          owner: "author-a",
+          upToDate: true,
+        };
+
+        const waiting = yield* readTrain(
+          yield* stepTrain(yield* openTrain(input), [
+            {
+              at: 0,
+              candidates: [
+                candidate,
+                { ...candidate, checks: [], headSha: "car-b", number: 2 },
+              ],
+              main: "base-a",
+              type: "candidates",
+            },
+            { at: 0, type: "depart" },
+          ])
+        );
+
+        expect(waiting.context.cars.map((entry) => entry.number)).toEqual([2]);
+        refusal(
+          notBoarded(waiting.context, { ...admission, input }),
+          "NotBoarded",
+          "landing a car that did not pass boarding policy",
+          "fix the red"
+        );
+      })
+  );
+
   it.effect("hands back a red train naming its failing checks", () =>
     Effect.gen(function* outside() {
       const test = yield* fixture();

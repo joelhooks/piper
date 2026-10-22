@@ -207,6 +207,7 @@ describe("PiperConfig", () => {
           maxCars: 8,
           pollMs: 90_000,
           requireUpToDate: true,
+          sharedBoarding: "ownCiGreen",
         },
         observe: {
           cadence: { maxMs: 900_000, minMs: 15_000 },

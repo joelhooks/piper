@@ -107,6 +107,13 @@ export const RankSchema = Schema.Struct({
 
 export type Rank = typeof RankSchema.Type;
 
+export const SharedBoardingSchema = Schema.Literals([
+  "ownCiGreen",
+  "notKnownRed",
+]);
+
+export type SharedBoarding = typeof SharedBoardingSchema.Type;
+
 export const TrainInputSchema = Schema.Struct({
   candidateIgnoredChecks: Schema.optionalKey(Schema.Array(Schema.String)),
   candidateRequiredChecks: Schema.optionalKey(
@@ -121,6 +128,7 @@ export const TrainInputSchema = Schema.Struct({
   pollMs: PollMs,
   repo: Schema.NonEmptyString,
   requireUpToDate: Schema.optionalKey(Schema.Boolean),
+  sharedBoarding: Schema.optionalKey(SharedBoardingSchema),
   train: PrNumber,
   trainLabel: Schema.NonEmptyString,
 });
