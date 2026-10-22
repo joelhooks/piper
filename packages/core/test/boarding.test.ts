@@ -1,7 +1,10 @@
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import type { Candidate } from "../src/domain.js";
+import { TrainInputSchema } from "../src/domain.js";
 import { isEligible, selectCars, verdictOn } from "../src/policy.js";
+import { input } from "./fixtures.js";
 
 const head = "synthetic-revision-41";
 
@@ -150,6 +153,14 @@ describe("lone car boarding", () => {
   const boarded = (pool: readonly Candidate[]) =>
     selectCars(pool, 2, rules).map((entry) => entry.number);
 
+  const shared = (
+    pool: readonly Candidate[],
+    sharedBoarding: "ownCiGreen" | "notKnownRed"
+  ) =>
+    selectCars(pool, 3, { ...rules, sharedBoarding }).map(
+      (entry) => entry.number
+    );
+
   it("boards a lone car on push while its checks are absent or pending, never past a known red", () => {
     expect(boarded([car([])])).toEqual([41]);
     expect(
@@ -199,5 +210,34 @@ describe("lone car boarding", () => {
     expect(boarded([pending, done])).toEqual([42]);
     expect(boarded([pending, { ...pending, number: 43 }])).toEqual([]);
     expect(boarded([pending, { ...pending, checks: [] }])).toEqual([41]);
+  });
+
+  it("boards a shared group on the lone rule under notKnownRed, never past a known red", () => {
+    const pending = car([checkRun("light suites", "in_progress", null)]);
+
+    const done = {
+      ...car([checkRun("light suites", "completed", "success")]),
+      number: 42,
+    };
+
+    const red = {
+      ...car([checkRun("side coverage", "completed", "failure")]),
+      number: 43,
+    };
+
+    expect(shared([pending, done], "notKnownRed")).toEqual([41, 42]);
+    expect(
+      shared([pending, { ...car([]), number: 44 }], "notKnownRed")
+    ).toEqual([41, 44]);
+    expect(shared([pending, red, done], "notKnownRed")).toEqual([41, 42]);
+    expect(shared([pending, done], "ownCiGreen")).toEqual([42]);
+  });
+
+  it("accepts only the two named shared boarding rules", () => {
+    const valid = Schema.is(TrainInputSchema);
+
+    expect(valid({ ...input(1), sharedBoarding: "notKnownRed" })).toBe(true);
+    expect(valid({ ...input(1), sharedBoarding: "ownCiGreen" })).toBe(true);
+    expect(valid({ ...input(1), sharedBoarding: "always" })).toBe(false);
   });
 });

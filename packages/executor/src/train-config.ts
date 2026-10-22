@@ -27,6 +27,7 @@ export const trainAdmission = (
       pollMs: mergeLine.pollMs,
       repo: name,
       requireUpToDate: mergeLine.requireUpToDate,
+      sharedBoarding: mergeLine.sharedBoarding,
       train,
       trainLabel: mergeLine.labels.train,
     },

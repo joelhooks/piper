@@ -181,6 +181,7 @@ export const notBoarded = (
 
   const absent =
     !alone &&
+    admission.input.sharedBoarding !== "notKnownRed" &&
     required.length > 0 &&
     required.every((group) =>
       group.some((name) => !checks.some((check) => check.name === name))

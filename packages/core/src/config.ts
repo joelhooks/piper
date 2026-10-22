@@ -1,6 +1,12 @@
 import { Array as Arr, Effect, flow, Schema } from "effect";
 
-import { CiTimeoutMs, MaxCars, PollMs, PrNumber } from "./domain.js";
+import {
+  CiTimeoutMs,
+  MaxCars,
+  PollMs,
+  PrNumber,
+  SharedBoardingSchema,
+} from "./domain.js";
 import { isGlob } from "./glob.js";
 import {
   DEFAULT_CARS,
@@ -142,6 +148,7 @@ const MergeLine = Schema.Struct({
   maxCars: orDefault(MaxCars, DEFAULT_CARS),
   pollMs: orDefault(PollMs, DEFAULT_POLL_MS),
   requireUpToDate: orDefault(Schema.Boolean, true),
+  sharedBoarding: orDefault(SharedBoardingSchema, "ownCiGreen"),
 });
 
 const command = { args: orDefault(Schema.Array(Text), []), command: Text };

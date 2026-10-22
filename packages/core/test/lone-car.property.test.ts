@@ -7,6 +7,7 @@ import type {
   CheckRun,
   Fact,
   Intent,
+  SharedBoarding,
   TrainEvent,
   TrainInput,
 } from "../src/domain.js";
@@ -42,6 +43,10 @@ const LoneCarSchema = Schema.Struct({
 type LoneCar = typeof LoneCarSchema.Type;
 
 const cars = Arbitrary.schema(LoneCarSchema);
+
+const sharedRules = Arbitrary.schema(
+  Schema.UndefinedOr(Schema.Literals(["ownCiGreen", "notKnownRed"]))
+);
 
 const StepSchema = Schema.Literals([
   "go",
@@ -170,6 +175,44 @@ const depart = Effect.fn("LoneCar.depart")(function* depart(
     { at: T0, type: "depart" },
   ]);
 });
+
+const departsShared = Effect.fn("LoneCar.departsShared")(
+  function* departsShared(car: LoneCar, rule: SharedBoarding | undefined) {
+    const opened = yield* openTrain(
+      rule === undefined
+        ? rulesFor(car)
+        : { ...rulesFor(car), sharedBoarding: rule }
+    );
+
+    const shared = yield* readTrain(
+      yield* stepTrain(opened, [
+        {
+          at: T0,
+          candidates: [candidateOf(car), partner],
+          main: MAIN,
+          type: "candidates",
+        },
+        { at: T0, type: "depart" },
+      ])
+    );
+
+    const boards =
+      rule === "notKnownRed"
+        ? admitted(car)
+        : admitted(car) && passed(car.light);
+
+    const boarded = boards ? [CAR, 42] : [42];
+
+    expect(shared.context.cars.map((entry) => entry.number)).toEqual(boarded);
+    const departed = departures(shared.context.facts);
+
+    expect(departed).toHaveLength(1);
+    expect(departed[0]).toMatchObject({ cars: boarded, path: "train" });
+    expect(departed[0]?.reason).toContain(
+      `shared boarding ${rule ?? "ownCiGreen"}`
+    );
+  }
+);
 
 const eventOf = (step: Step, at: number, main: string): TrainEvent =>
   Match.value(step).pipe(
@@ -308,6 +351,13 @@ describe("lone car fast paths", () => {
     "a lone car departs by the expected path, and a car sharing its group keeps the light-done rule",
     { car: cars },
     ({ car }) => departsByPath(car),
+    { arbitrary: { runs: 400 } }
+  );
+
+  it.effect.prop(
+    "a shared group boards a car on the lone rule only under notKnownRed, keeps its own-CI rule by default, and names the rule",
+    { car: cars, rule: sharedRules },
+    ({ car, rule }) => departsShared(car, rule),
     { arbitrary: { runs: 400 } }
   );
 

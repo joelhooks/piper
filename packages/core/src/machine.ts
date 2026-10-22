@@ -13,6 +13,7 @@ import type {
   IntentDraft,
   Purpose,
   Rank,
+  SharedBoarding,
   TrainInput,
 } from "./domain.js";
 import { TrainEvents, TrainInputSchema } from "./domain.js";
@@ -69,6 +70,7 @@ export interface TrainContext {
   readonly candidateRequiredChecks?: readonly (readonly string[])[];
   readonly directRequiredChecks?: readonly (readonly string[])[];
   readonly requireUpToDate?: boolean;
+  readonly sharedBoarding?: SharedBoarding;
   readonly train: number;
   readonly maxCars: number;
   readonly pollMs: number;
@@ -548,6 +550,7 @@ export const trainMachine = setupEffect({
     repo: input.repo,
     requireUpToDate: input.requireUpToDate ?? true,
     reruns: [],
+    sharedBoarding: input.sharedBoarding ?? "ownCiGreen",
     sync: 0,
     train: input.train,
     trainLabel: input.trainLabel,

@@ -6,6 +6,7 @@ import type {
   CheckRun,
   DeparturePath,
   Rank,
+  SharedBoarding,
 } from "./domain.js";
 import type { Plan } from "./plan.js";
 import { conflictPairs, readyNodes } from "./plan.js";
@@ -32,6 +33,8 @@ export interface RepoRules {
   readonly directRequiredChecks?: readonly (readonly string[])[];
 
   readonly requireUpToDate?: boolean;
+
+  readonly sharedBoarding?: SharedBoarding;
 }
 
 export const RERUN_BELOW_P = 0.2;
@@ -182,7 +185,9 @@ export const isEligible = (
   candidate.labels.includes(rules.trainLabel) &&
   candidate.operatorReviewed &&
   (rules.requireUpToDate === false || candidate.upToDate) &&
-  (lone ? !knownRed(candidate, rules) : boardingGreen(candidate, rules));
+  (lone || rules.sharedBoarding === "notKnownRed"
+    ? !knownRed(candidate, rules)
+    : boardingGreen(candidate, rules));
 
 const listed = (names: readonly string[]) =>
   [...new Set(names)].toSorted().join(", ");
@@ -329,7 +334,10 @@ export const departure = (
     return {
       cars,
       path: "train",
-      reason: `${cars.length} of ${groupSize(pool)} cars in the group passed light-done boarding; a shared train waits for each car's own CI`,
+      reason:
+        rules.sharedBoarding === "notKnownRed"
+          ? `${cars.length} of ${groupSize(pool)} cars in the group have no known red; shared boarding notKnownRed skips the wait for each car's own CI, so the train's CI is their proof`
+          : `${cars.length} of ${groupSize(pool)} cars in the group passed their boarding checks; shared boarding ownCiGreen waits for each car's own CI`,
     };
   }
 

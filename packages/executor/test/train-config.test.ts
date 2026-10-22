@@ -44,6 +44,7 @@ const configFor = (written: TrainAdmission) => {
       maxCars: input.maxCars,
       pollMs: input.pollMs,
       requireUpToDate: input.requireUpToDate ?? true,
+      sharedBoarding: input.sharedBoarding ?? "ownCiGreen",
     },
     repo: { base: written.baseBranch, name, owner },
   });
@@ -56,6 +57,7 @@ const explicit = (written: TrainAdmission): TrainAdmission => ({
     candidateRequiredChecks: [],
     directRequiredChecks: [],
     requireUpToDate: true,
+    sharedBoarding: "ownCiGreen",
     ...written.input,
   },
 });
@@ -137,6 +139,7 @@ describe("train admission from PiperConfig", () => {
             pollMs: 15_000,
             repo: "acme/shop",
             requireUpToDate: true,
+            sharedBoarding: "ownCiGreen",
             train: 3,
             trainLabel: "train",
           },
