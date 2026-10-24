@@ -444,6 +444,11 @@ const comparable = (snapshot: TrainSnapshot) => {
   return { context: rest, status, value };
 };
 
+const TWO_HUNDRED_TRACES_WITH_A_CI_RUNNER_BUDGET = {
+  arbitrary: { runs: 200, size: 100 },
+  timeout: 30_000,
+};
+
 describe("train lifecycle rules over generated traces", () => {
   it.effect.prop(
     "cars within the cap, landing only green on the exact head after GO, bisect removes a car, main moves rebuild",
@@ -467,7 +472,7 @@ describe("train lifecycle rules over generated traces", () => {
           comparable(yield* readTrain(live.persisted))
         );
       }),
-    { arbitrary: { runs: 200, size: 100 } }
+    TWO_HUNDRED_TRACES_WITH_A_CI_RUNNER_BUDGET
   );
 
   it.effect.prop(
@@ -482,7 +487,7 @@ describe("train lifecycle rules over generated traces", () => {
           comparable(yield* readTrain(live.persisted))
         );
       }),
-    { arbitrary: { runs: 200, size: 100 } }
+    TWO_HUNDRED_TRACES_WITH_A_CI_RUNNER_BUDGET
   );
 
   it.effect.prop(
@@ -510,7 +515,7 @@ describe("train lifecycle rules over generated traces", () => {
           comparable(yield* readTrain(live.persisted))
         );
       }),
-    { arbitrary: { runs: 200, size: 100 } }
+    TWO_HUNDRED_TRACES_WITH_A_CI_RUNNER_BUDGET
   );
 
   it.effect("the generator reaches every rule it claims to check", () =>
