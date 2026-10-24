@@ -1,4 +1,5 @@
 import { ExecutorError } from "@joelhooks/piper-executor/domain";
+import { ApiRuns, workflowRun } from "@joelhooks/piper-executor/execute";
 import { GitHub } from "@joelhooks/piper-executor/github";
 import { CheckRunSchema } from "@joelhooks/piper/domain";
 import type {
@@ -6,6 +7,7 @@ import type {
   TrainInput,
   CandidateSchema,
 } from "@joelhooks/piper/domain";
+import { speakingChecks } from "@joelhooks/piper/policy";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 
 import { ShadowError } from "./domain.js";
@@ -56,9 +58,26 @@ export const readPages = Effect.fn("Shadow.readPages")(function* readPages<
 
 const ApiCheck = Schema.Struct({
   ...CheckRunSchema.fields,
+  check_suite: Schema.optionalKey(Schema.Struct({ id: Schema.Int })),
   headSha: Schema.optionalKey(Schema.String),
   head_sha: Schema.String,
 });
+
+const readWorkflowRuns = Effect.fn("Shadow.readWorkflowRuns")(
+  function* readWorkflowRuns(repo: string, head: string) {
+    const github = yield* GitHub;
+
+    const runs = yield* Schema.decodeUnknownEffect(ApiRuns)(
+      yield* github.read(
+        repo,
+        `/actions/runs?head_sha=${encodeURIComponent(head)}&per_page=100`
+      )
+    );
+
+    return runs.workflow_runs.map(workflowRun);
+  },
+  Effect.orElseSucceed(() => [])
+);
 
 export const readChecks = Effect.fn("Shadow.readChecks")(function* readChecks(
   repo: string,
@@ -87,7 +106,15 @@ export const readChecks = Effect.fn("Shadow.readChecks")(function* readChecks(
     });
   }
 
-  return response.check_runs.map((check) => ({
+  const runs = yield* readWorkflowRuns(repo, head);
+
+  return speakingChecks(
+    response.check_runs.map((check) => ({
+      ...check,
+      suite: check.check_suite?.id,
+    })),
+    runs
+  ).map((check) => ({
     conclusion: check.conclusion,
     headSha: head,
     name: check.name,
