@@ -247,7 +247,16 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     if (path.includes("/actions/runs?")) {
       return {
         total_count: 1,
-        workflow_runs: [{ check_suite_id: 10, id: 11, run_attempt: 2 }],
+        workflow_runs: [
+          {
+            check_suite_id: 10,
+            created_at: "2026-01-01T00:00:00Z",
+            event: "pull_request",
+            id: 11,
+            run_attempt: 2,
+            workflow_id: 1,
+          },
+        ],
       };
     }
 

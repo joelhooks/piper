@@ -50,6 +50,16 @@ export const CheckRunSchema = Schema.Struct({
 
 export type CheckRun = typeof CheckRunSchema.Type;
 
+export const WorkflowRunSchema = Schema.Struct({
+  checkSuite: Schema.Int,
+  createdAt: Millis,
+  event: Schema.String,
+  id: Schema.Int,
+  workflow: Schema.Int,
+});
+
+export type WorkflowRun = typeof WorkflowRunSchema.Type;
+
 export const CandidateSchema = Schema.Struct({
   checks: Schema.Array(CheckRunSchema),
   headSha: Sha,

@@ -1,6 +1,20 @@
-import type { RankSchema, JudgeSchema } from "@joelhooks/piper/domain";
+import type {
+  RankSchema,
+  JudgeSchema,
+  WorkflowRun,
+} from "@joelhooks/piper/domain";
 import { CheckRunSchema } from "@joelhooks/piper/domain";
-import { Clock, Context, Data, Effect, Layer, Predicate, Schema } from "effect";
+import { speakingChecks } from "@joelhooks/piper/policy";
+import {
+  Clock,
+  Context,
+  Data,
+  DateTime,
+  Effect,
+  Layer,
+  Predicate,
+  Schema,
+} from "effect";
 
 import { decode } from "./boundary.js";
 import { ExecutorError } from "./domain.js";
@@ -77,15 +91,26 @@ const ApiChecks = Schema.Struct({
   total_count: Schema.Int,
 });
 
-const ApiRuns = Schema.Struct({
+const ApiRun = Schema.Struct({
+  check_suite_id: Schema.Int,
+  created_at: Schema.DateTimeUtcFromString,
+  event: Schema.String,
+  id: Schema.Int,
+  run_attempt: Schema.Int,
+  workflow_id: Schema.Int,
+});
+
+export const ApiRuns = Schema.Struct({
   total_count: Schema.Int,
-  workflow_runs: Schema.Array(
-    Schema.Struct({
-      check_suite_id: Schema.Int,
-      id: Schema.Int,
-      run_attempt: Schema.Int,
-    })
-  ),
+  workflow_runs: Schema.Array(ApiRun),
+});
+
+export const workflowRun = (run: typeof ApiRun.Type): WorkflowRun => ({
+  checkSuite: run.check_suite_id,
+  createdAt: DateTime.toEpochMillis(run.created_at),
+  event: run.event,
+  id: run.id,
+  workflow: run.workflow_id,
 });
 
 export const readChecks = Effect.fn("Executor.checks")(function* readChecks(
@@ -93,7 +118,7 @@ export const readChecks = Effect.fn("Executor.checks")(function* readChecks(
   head: string
 ) {
   const github = yield* GitHub;
-  const checks: (typeof CheckRunSchema.Type)[] = [];
+  const raw: (typeof ApiCheck.Type)[] = [];
   let page = 1;
   let total = 1;
 
@@ -112,7 +137,7 @@ export const readChecks = Effect.fn("Executor.checks")(function* readChecks(
     });
   }
 
-  while (checks.length < total && page <= 10) {
+  while (raw.length < total && page <= 10) {
     const batch = yield* decode(ApiChecks)(
       yield* github.read(
         repo,
@@ -122,53 +147,55 @@ export const readChecks = Effect.fn("Executor.checks")(function* readChecks(
 
     total = batch.total_count;
 
-    if (batch.check_runs.length === 0 && checks.length < total) {
+    if (batch.check_runs.length === 0 && raw.length < total) {
       return yield* new ExecutorError({
         code: "provider",
         message: "Check pagination is incomplete",
       });
     }
 
-    for (const check of batch.check_runs) {
-      if (check.head_sha !== head) {
-        return yield* new ExecutorError({
-          code: "head-mismatch",
-          message: "Checks belong to another head",
-        });
-      }
-
-      const run = runs.workflow_runs.find(
-        (item) => item.check_suite_id === check.check_suite?.id
-      );
-
-      const observation = {
-        conclusion: check.conclusion,
-        headSha: head,
-        name: check.name,
-        status: check.status,
-      };
-
-      const attempted =
-        run === undefined
-          ? observation
-          : { ...observation, attempt: run.run_attempt, runId: run.id };
-
-      checks.push(
-        check.id === undefined ? attempted : { ...attempted, id: check.id }
-      );
+    if (batch.check_runs.some((check) => check.head_sha !== head)) {
+      return yield* new ExecutorError({
+        code: "head-mismatch",
+        message: "Checks belong to another head",
+      });
     }
 
+    raw.push(...batch.check_runs);
     page += 1;
   }
 
-  if (checks.length < total) {
+  if (raw.length < total) {
     return yield* new ExecutorError({
       code: "provider",
       message: "Check read exceeds pagination bound",
     });
   }
 
-  return checks;
+  const speaking = speakingChecks(
+    raw.map((check) => ({ ...check, suite: check.check_suite?.id })),
+    runs.workflow_runs.map(workflowRun)
+  );
+
+  return speaking.map((check): typeof CheckRunSchema.Type => {
+    const run = runs.workflow_runs.find(
+      (item) => item.check_suite_id === check.suite
+    );
+
+    const observation = {
+      conclusion: check.conclusion,
+      headSha: head,
+      name: check.name,
+      status: check.status,
+    };
+
+    const attempted =
+      run === undefined
+        ? observation
+        : { ...observation, attempt: run.run_attempt, runId: run.id };
+
+    return check.id === undefined ? attempted : { ...attempted, id: check.id };
+  });
 });
 
 const write = (

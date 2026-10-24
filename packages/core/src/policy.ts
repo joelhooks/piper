@@ -7,6 +7,7 @@ import type {
   DeparturePath,
   Rank,
   SharedBoarding,
+  WorkflowRun,
 } from "./domain.js";
 import type { Plan } from "./plan.js";
 import { conflictPairs, readyNodes } from "./plan.js";
@@ -87,6 +88,63 @@ export const latestRuns = (
   }
 
   return [...latest.values()];
+};
+
+const isNewerRun = (run: WorkflowRun, held: WorkflowRun): boolean =>
+  run.createdAt > held.createdAt ||
+  (run.createdAt === held.createdAt && run.id > held.id);
+
+export const supersededSuites = (
+  runs: readonly WorkflowRun[]
+): ReadonlySet<number> => {
+  const newest = new Map<string, WorkflowRun>();
+
+  for (const run of runs) {
+    const key = `${run.workflow}\u0000${run.event}`;
+    const held = newest.get(key);
+
+    if (held === undefined || isNewerRun(run, held)) {
+      newest.set(key, run);
+    }
+  }
+
+  const speaking = new Set([...newest.values()].map((run) => run.checkSuite));
+
+  return new Set(
+    runs.flatMap((run) =>
+      speaking.has(run.checkSuite) ? [] : [run.checkSuite]
+    )
+  );
+};
+
+export interface SuiteCheck {
+  readonly id?: number | undefined;
+  readonly name: string;
+  readonly suite?: number | undefined;
+}
+
+export const speakingChecks = <C extends SuiteCheck>(
+  checks: readonly C[],
+  runs: readonly WorkflowRun[]
+): readonly C[] => {
+  const superseded = supersededSuites(runs);
+  const newest = new Map<string, C>();
+
+  for (const check of checks.filter(
+    (item) => item.suite === undefined || !superseded.has(item.suite)
+  )) {
+    const held = newest.get(check.name);
+
+    if (
+      held?.id === undefined ||
+      check.id === undefined ||
+      check.id > held.id
+    ) {
+      newest.set(check.name, check);
+    }
+  }
+
+  return [...newest.values()];
 };
 
 export type CiVerdict =
