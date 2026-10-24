@@ -1,7 +1,15 @@
 import { ExecutorError } from "@joelhooks/piper-executor/domain";
 import { GitHub } from "@joelhooks/piper-executor/github";
 import { TokenProvider } from "@joelhooks/piper-executor/token";
-import { Clock, Context, Effect, Layer, Redacted, Semaphore } from "effect";
+import {
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Redacted,
+  Schedule,
+  Semaphore,
+} from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 import type { RawRead } from "./domain.js";
@@ -13,6 +21,16 @@ export class ReadReceipts extends Context.Service<
     readonly append: (read: RawRead) => Effect.Effect<void>;
   }
 >()("piper-shadow/ReadReceipts") {}
+
+const transientReadRetry = Schedule.max([
+  Schedule.min([
+    Schedule.exponential("500 millis"),
+    Schedule.spaced("3 seconds"),
+  ]),
+  Schedule.recurs(4),
+]);
+
+const transientStatuses: ReadonlySet<number> = new Set([502, 503, 504]);
 
 export const retryDelay = (header: string | undefined, now: number): number => {
   if (header === undefined) {
@@ -113,6 +131,14 @@ export const shadowGitHub = (intervalMs = 2000, minimum = 0.2) =>
                   code: "transport",
                   message: "Shadow GET failed; provider details withheld",
                 })
+            ),
+            Effect.filterOrFail(
+              (sent) => !transientStatuses.has(sent.status),
+              (sent) => ({ _tag: "TransientResponse" as const, response: sent })
+            ),
+            Effect.retry(transientReadRetry),
+            Effect.catchTag("TransientResponse", ({ response: last }) =>
+              Effect.succeed(last)
             )
           );
 
