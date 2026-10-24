@@ -20,6 +20,7 @@
     "plugins": [
       {
         "name": "@effect/language-service",
+        "ignoreEffectWarningsInTscExitCode": false,
         "namespaceImportPackages": ["effect", "@effect/platform-node"],
         "diagnosticSeverity": {
           "anyUnknownInErrorContext": "error",
@@ -59,8 +60,7 @@
         }
       }
     ],
-    "allowImportingTsExtensions": true,
-    "allowJs": true
+    "allowImportingTsExtensions": true
   },
   "exclude": [
     "packages/*/test/**",
@@ -73,8 +73,6 @@
     "packages/**/*.ts",
     "scripts/**/*.ts",
     "tools/oxlint/**/*.ts",
-    "*.config.ts",
-    "scripts/**/*.mjs",
-    "scripts/**/*.js"
+    "*.config.ts"
   ]
 }
