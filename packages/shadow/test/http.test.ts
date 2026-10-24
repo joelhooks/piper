@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { GitHub } from "@joelhooks/piper-executor/github";
 import { TokenProvider } from "@joelhooks/piper-executor/token";
 import { Clock, Effect, Fiber, Layer, Match, Redacted, Result } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
 
 import type { RawRead } from "../src/domain.js";
@@ -17,6 +17,131 @@ const receipts = (reads: RawRead[]) =>
         reads.push(read);
       }),
   });
+
+type Reply = "offline" | number;
+
+const scripted = (replies: readonly Reply[], times: number[]) =>
+  HttpClient.make((request) =>
+    Effect.gen(function* respond() {
+      times.push(yield* Clock.currentTimeMillis);
+      expect(request.method).toBe("GET");
+      const reply = replies[Math.min(times.length, replies.length) - 1];
+
+      return yield* reply === "offline" || reply === undefined
+        ? Effect.fail(
+            new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({ request }),
+            })
+          )
+        : Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({ sha: "synthetic-head" }, { status: reply })
+            )
+          );
+    })
+  );
+
+const scriptedRead = (replies: readonly Reply[]) =>
+  Effect.gen(function* run() {
+    const times: number[] = [];
+    const reads: RawRead[] = [];
+
+    const layer = shadowGitHub().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(HttpClient.HttpClient, scripted(replies, times)),
+          TokenProvider.fromValue(token, 3_600_000),
+          receipts(reads)
+        )
+      )
+    );
+
+    const fiber = yield* GitHub.use((github) =>
+      github.read("sample/project", "/git/ref/heads/main")
+    ).pipe(Effect.provide(layer), Effect.result, Effect.forkChild);
+
+    yield* TestClock.adjust("1 minute");
+    const result = yield* Fiber.join(fiber);
+
+    return { reads, result, times };
+  });
+
+describe("transient read retry", () => {
+  it.effect("returns the value after a transport failure", () =>
+    Effect.gen(function* test() {
+      const { reads, result, times } = yield* scriptedRead(["offline", 200]);
+
+      expect(result).toEqual(Result.succeed({ sha: "synthetic-head" }));
+      expect(times).toEqual([0, 500]);
+      expect(reads).toHaveLength(1);
+    })
+  );
+
+  it.effect("returns the value after three 503 responses", () =>
+    Effect.gen(function* test() {
+      const { reads, result, times } = yield* scriptedRead([
+        503, 503, 503, 200,
+      ]);
+
+      expect(result).toEqual(Result.succeed({ sha: "synthetic-head" }));
+      expect(times).toEqual([0, 500, 1500, 3500]);
+      expect(reads).toHaveLength(1);
+    })
+  );
+
+  it.effect(
+    "returns the transport error after the bounded retries of a persistent failure",
+    () =>
+      Effect.gen(function* test() {
+        const { reads, result, times } = yield* scriptedRead(["offline"]);
+
+        expect(Result.isFailure(result)).toBe(true);
+
+        if (Result.isFailure(result)) {
+          expect(result.failure).toMatchObject({
+            code: "transport",
+            message: "Shadow GET failed; provider details withheld",
+          });
+        }
+
+        expect(times).toEqual([0, 500, 1500, 3500, 6500]);
+        expect(reads).toEqual([]);
+      })
+  );
+
+  it.effect("reports the last 5xx as a provider error after the retries", () =>
+    Effect.gen(function* test() {
+      const { result, times } = yield* scriptedRead([502]);
+
+      expect(Result.isFailure(result)).toBe(true);
+
+      if (Result.isFailure(result)) {
+        expect(result.failure).toMatchObject({
+          code: "provider",
+          message: "GitHub returned HTTP 502",
+        });
+      }
+
+      expect(times).toHaveLength(5);
+    })
+  );
+
+  it.effect("does not retry a 404", () =>
+    Effect.gen(function* test() {
+      const { reads, result, times } = yield* scriptedRead([404, 200]);
+
+      expect(Result.isFailure(result)).toBe(true);
+
+      if (Result.isFailure(result)) {
+        expect(result.failure).toMatchObject({ code: "not-found" });
+      }
+
+      expect(times).toEqual([0]);
+      expect(reads).toMatchObject([{ missing: true }]);
+    })
+  );
+});
 
 describe("shared GitHub rate budget", () => {
   it.effect(
