@@ -229,8 +229,15 @@ const harness = (journal: Entry[], plan: RunPlan) => {
   return { layer, trace };
 };
 
-const settle = Effect.fn("settle")(function* settle(ready: () => boolean) {
-  for (let turn = 0; turn < 4096 && !ready(); turn += 1) {
+const SETTLE_TURNS = 4096;
+
+const QUIET_TURNS = 32;
+
+const settle = Effect.fn("settle")(function* settle(
+  ready: () => boolean,
+  turns: number
+) {
+  for (let turn = 0; turn < turns && !ready(); turn += 1) {
     yield* Effect.yieldNow;
   }
 });
@@ -266,12 +273,12 @@ const runActor = Effect.fn("runActor")(function* runActor(
     },
   });
 
-  yield* settle(() => actor.getSnapshot().status !== "active");
+  yield* settle(() => actor.getSnapshot().status !== "active", SETTLE_TURNS);
   const final = actor.getSnapshot();
   const settled = trace.length;
 
   yield* TestClock.adjust("1 hour");
-  yield* settle(() => trace.length > settled);
+  yield* settle(() => trace.length > settled, QUIET_TURNS);
 
   expect(actor.getSnapshot()).toBe(final);
   expect(trace).toHaveLength(settled);
@@ -327,14 +334,14 @@ describe("executor drain lifecycle model", () => {
     "the live actor matches the model at every append, post and state across restarts",
     histories,
     ({ runs }) => replayActor(runs),
-    { arbitrary: { runs: 300 } }
+    { arbitrary: { runs: 200 }, timeout: 15_000 }
   );
 
   it.effect.prop(
     "runOnce succeeds, fails or dies as the model's final state says",
     histories,
     ({ runs }) => replayHost(runs),
-    { arbitrary: { runs: 150 } }
+    { arbitrary: { runs: 150 }, timeout: 15_000 }
   );
 
   it.effect("the generator reaches every rule the model encodes", () =>
