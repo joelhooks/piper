@@ -87,9 +87,19 @@ const overrideReview = (
   target: targetOf("armed"),
 });
 
+type Observed<Outcome extends string> = Extract<
+  ReleaseEvent,
+  { readonly outcome: Outcome; readonly type: "observed" }
+>;
+
 const supersede = (
   context: ReleaseContext,
-  event: Extract<ReleaseEvent, { readonly type: "superseded" }>
+  successor: {
+    readonly at: number;
+    readonly by: string;
+    readonly cause: "superseded" | "observationSuperseded";
+    readonly evidence: string;
+  }
 ) => ({
   context: {
     ...context,
@@ -97,18 +107,49 @@ const supersede = (
     facts: [
       ...context.facts,
       {
-        at: event.at,
-        by: event.by,
-        cause: "superseded",
-        evidence: event.evidence,
+        ...successor,
         kind: "superseded",
         state: "superseded",
       } satisfies ReleaseFact,
     ],
-    lastAt: event.at,
+    lastAt: successor.at,
   },
   target: targetOf("superseded"),
 });
+
+const escalateFailedBuild = (
+  context: ReleaseContext,
+  { at, check, deploymentId, deploymentState }: Observed<"build-failed">
+) => {
+  const notified = emit(context, at, {
+    cause: "observationBuildFailed",
+    check,
+    deploymentId,
+    deploymentState,
+    kind: "NotifyOwner",
+  });
+
+  return {
+    context: {
+      ...notified,
+      facts: [
+        ...notified.facts,
+        {
+          at,
+          cause: "observationBuildFailed",
+          check,
+          deploymentId,
+          deploymentState,
+          kind: "buildFailed",
+          offending: notified.offending,
+          state: "escalated",
+        } satisfies ReleaseFact,
+      ],
+      lastAt: at,
+    },
+    target: targetOf("escalated"),
+  };
+};
 
 const restore = (context: ReleaseContext, at: number, cause: string) =>
   move(
@@ -150,6 +191,19 @@ const observe = (
           check: event.check,
           kind: "NotifyOwner",
         });
+  }
+
+  if (event.outcome === "build-failed") {
+    return escalateFailedBuild(context, event);
+  }
+
+  if (event.outcome === "superseded") {
+    return supersede(context, {
+      at: event.at,
+      by: event.by,
+      cause: "observationSuperseded",
+      evidence: event.deploymentId,
+    });
   }
 
   if (context.deadlineAt !== undefined && event.at >= context.deadlineAt) {
@@ -346,7 +400,14 @@ export const releaseMachine = setupEffect({
             ? observe(context, event)
             : undefined,
         superseded: ({ context, event }) =>
-          event.at >= context.lastAt ? supersede(context, event) : undefined,
+          event.at >= context.lastAt
+            ? supersede(context, {
+                at: event.at,
+                by: event.by,
+                cause: "superseded",
+                evidence: event.evidence,
+              })
+            : undefined,
         tick: ({ context, event }) =>
           event.at >= context.lastAt &&
           context.deadlineAt !== undefined &&

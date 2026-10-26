@@ -39,7 +39,11 @@ import { Recorder } from "./recorder.js";
 import { CheckDelivery } from "./release-check.js";
 import type { CheckInput } from "./release-check.js";
 import { runObservers } from "./release-observers.js";
-import { AdmissionSchema, ReleaseConfigSchema } from "./release-run-domain.js";
+import {
+  AdmissionSchema,
+  ReleaseConfigSchema,
+  VerdictRowSchema,
+} from "./release-run-domain.js";
 import type {
   Admission,
   Ready,
@@ -52,6 +56,7 @@ import {
   codeOnlyPlan,
   releaseAdmissionRefusal,
   releaseConfigRefusal,
+  releaseNote,
 } from "./release-run-policy.js";
 import {
   MessageSink,
@@ -69,6 +74,8 @@ import {
 import type { ReleaseOutcome } from "./release.js";
 
 const refusals = Data.taggedEnum<ReleaseRefusal>();
+
+const isVerdictOutcome = Schema.is(VerdictRowSchema.fields.outcome);
 
 const events = Data.taggedEnum<PostedReleaseEvent>();
 
@@ -542,7 +549,7 @@ const observe = Effect.fn("ReleaseRun.observe")(function* observe(
 
         if (
           Predicate.isTagged(event, "observed") &&
-          event.outcome !== "unknown"
+          isVerdictOutcome(event.outcome)
         ) {
           yield* verdicts.write({
             evidence: JSON.stringify(event.detail ?? {}),
@@ -632,7 +639,9 @@ const finish = Effect.fn("ReleaseRun.finish")(function* finish(
   const log = yield* RunLog;
   yield* log.append(runLines.finished({ state: output.snapshot.value }));
   yield* sink
-    .send(`finished: ${output.snapshot.value}`)
+    .send(
+      `finished: ${output.snapshot.value}${releaseNote(output.snapshot.context.facts.at(-1))}`
+    )
     .pipe(Effect.catch(() => Effect.void));
 
   return output;
@@ -645,7 +654,7 @@ const page = Effect.fn("ReleaseRun.page")(function* page(
   const sink = yield* MessageSink;
   yield* sink
     .page(
-      `release ${context.config.name} ${context.config.input.target.slice(0, 8)}: ${output.snapshot.value}`
+      `release ${context.config.name} ${context.config.input.target.slice(0, 8)}: ${output.snapshot.value}${releaseNote(output.snapshot.context.facts.at(-1))}`
     )
     .pipe(Effect.catch(() => Effect.void));
 
@@ -825,6 +834,10 @@ export const releaseDriverMachine = setupEffect({
 
           if (snapshot.matches("restored")) {
             return { target: "restored" };
+          }
+
+          if (snapshot.matches("superseded")) {
+            return { target: "superseded" };
           }
 
           if (snapshot.matches("armed")) {
@@ -1061,6 +1074,7 @@ export const releaseDriverMachine = setupEffect({
         src: "reviewTask",
       },
     },
+    superseded: { type: "final" },
   },
 });
 

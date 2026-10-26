@@ -250,15 +250,34 @@ describe("release executor command and judgment ports", () => {
           },
           { ...stamp, cause: "deployFailed", kind: "NotifyOwner" },
           { ...stamp, cause: "observationExpired", kind: "NotifyOwner" },
+          {
+            ...stamp,
+            cause: "observationBuildFailed",
+            check: "availability",
+            deploymentId: "deployment-failed",
+            deploymentState: "CANCELED",
+            kind: "NotifyOwner",
+          },
         ] satisfies readonly ReleaseIntent[]) {
           for (const settings of [dry, live]) {
             const state = fake([]);
             const calls: unknown[] = [];
 
-            const args =
+            const named =
               "check" in intent
                 ? ["--cause", intent.cause, "--check", intent.check]
                 : ["--cause", intent.cause];
+
+            const args =
+              "deploymentId" in intent
+                ? [
+                    ...named,
+                    "--deployment",
+                    intent.deploymentId,
+                    "--deployment-state",
+                    intent.deploymentState,
+                  ]
+                : named;
 
             const result = yield* execute(job(intent), settings).pipe(
               Effect.provide(
@@ -290,6 +309,97 @@ describe("release executor command and judgment ports", () => {
                 : [{ args, command: "notify-command" }]
             );
           }
+        }
+      })
+  );
+
+  it.effect(
+    "check commands carry build-failed and superseded words and their detail to core; malformed words stay unknown",
+    () =>
+      Effect.gen(function* releaseWords() {
+        const buildFailed = {
+          deploymentId: "deployment-failed",
+          outcome: "build-failed",
+          state: "CANCELED",
+          url: "build.sample.test",
+        };
+
+        const superseded = {
+          by: "commit-newer",
+          deploymentId: "deployment-newer",
+          outcome: "superseded",
+        };
+
+        for (const [line, expected] of [
+          [
+            `diagnostic\n${JSON.stringify(buildFailed)}`,
+            releaseEvents.observed({
+              at: 0,
+              check: "availability",
+              deploymentId: "deployment-failed",
+              deploymentState: "CANCELED",
+              detail: {
+                deploymentId: "deployment-failed",
+                state: "CANCELED",
+                url: "build.sample.test",
+              },
+              outcome: "build-failed",
+            }),
+          ],
+          [
+            JSON.stringify(superseded),
+            releaseEvents.observed({
+              at: 0,
+              by: "commit-newer",
+              check: "availability",
+              deploymentId: "deployment-newer",
+              detail: { by: "commit-newer", deploymentId: "deployment-newer" },
+              outcome: "superseded",
+            }),
+          ],
+          ...[
+            { outcome: "build-failed" },
+            { ...buildFailed, deploymentId: "" },
+            { ...buildFailed, state: "READY" },
+            { deploymentId: "deployment-failed", outcome: "build-failed" },
+            { deploymentId: "deployment-newer", outcome: "superseded" },
+            { ...superseded, by: "" },
+            { by: "commit-newer", outcome: "superseded" },
+            { ...superseded, outcome: "retired" },
+          ].map((malformed): [string, PostedReleaseEvent] => [
+            JSON.stringify(malformed),
+            releaseEvents.observed({
+              at: 0,
+              check: "availability",
+              detail: {},
+              outcome: "unknown",
+            }),
+          ]),
+        ] satisfies readonly [string, PostedReleaseEvent][]) {
+          const state = fake([]);
+
+          const result = yield* execute(
+            job({
+              ...stamp,
+              checks: [{ name: "availability", onFail: "restore" }],
+              deadlineAt: 1000,
+              kind: "Observe",
+            }),
+            live
+          ).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                state.layer,
+                admitted,
+                Layer.succeed(ReleaseCommandConfig, commands),
+                Layer.succeed(ReleaseCommands, {
+                  run: () => Effect.succeed(line),
+                })
+              )
+            )
+          );
+
+          expect(result.events, line).toEqual([expected]);
         }
       })
   );

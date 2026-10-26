@@ -103,6 +103,33 @@ export type ReleaseInput = typeof ReleaseInputSchema.Type;
 
 const stamp = { at: time };
 
+export const DeploymentStateSchema = Schema.Literals(["ERROR", "CANCELED"]);
+
+const observedStamp = { ...stamp, check: name };
+
+const ObservedSettledSchema = Schema.Struct({
+  ...observedStamp,
+  outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
+});
+
+const ObservedBuildFailedSchema = Schema.Struct({
+  ...observedStamp,
+  deploymentId: name,
+  deploymentState: DeploymentStateSchema,
+  outcome: Schema.Literal("build-failed"),
+});
+
+const ObservedSupersededSchema = Schema.Struct({
+  ...observedStamp,
+  by: name,
+  deploymentId: name,
+  outcome: Schema.Literal("superseded"),
+});
+
+const observedDetail = {
+  detail: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+};
+
 export const ReleaseEvents = {
   baselined: Schema.Struct({
     ...stamp,
@@ -116,11 +143,11 @@ export const ReleaseEvents = {
     reason: name,
   }),
   fire: Schema.Struct({ ...stamp, by: name }),
-  observed: Schema.Struct({
-    ...stamp,
-    check: name,
-    outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
-  }),
+  observed: Schema.Union([
+    ObservedSettledSchema,
+    ObservedBuildFailedSchema,
+    ObservedSupersededSchema,
+  ]),
   override: Schema.Struct({ ...stamp, by: name, reason: name }),
   planned: Schema.Struct({ ...stamp, rows: ReleasePlanSchema }),
   reject: Schema.Struct({ ...stamp, by: name, reason: name }),
@@ -150,8 +177,16 @@ export const PostedReleaseEventSchema = Schema.Union([
   Schema.TaggedStruct("fire", ReleaseEvents.fire.fields),
   Schema.TaggedStruct("deployed", ReleaseEvents.deployed.fields),
   Schema.TaggedStruct("observed", {
-    ...ReleaseEvents.observed.fields,
-    detail: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+    ...ObservedSettledSchema.fields,
+    ...observedDetail,
+  }),
+  Schema.TaggedStruct("observed", {
+    ...ObservedBuildFailedSchema.fields,
+    ...observedDetail,
+  }),
+  Schema.TaggedStruct("observed", {
+    ...ObservedSupersededSchema.fields,
+    ...observedDetail,
   }),
   Schema.TaggedStruct("tick", ReleaseEvents.tick.fields),
   Schema.TaggedStruct("restored", ReleaseEvents.restored.fields),
@@ -230,6 +265,14 @@ export const ReleaseIntentSchema = Schema.Union([
     cause: Schema.Literals(["deployFailed", "observationExpired"]),
     kind: Schema.Literal("NotifyOwner"),
   }),
+  Schema.Struct({
+    ...intentStamp,
+    cause: Schema.Literal("observationBuildFailed"),
+    check: name,
+    deploymentId: name,
+    deploymentState: DeploymentStateSchema,
+    kind: Schema.Literal("NotifyOwner"),
+  }),
 ]);
 
 export type ReleaseIntent = typeof ReleaseIntentSchema.Type;
@@ -279,6 +322,13 @@ export const ReleaseFactSchema = Schema.Union([
     by: name,
     evidence: name,
     kind: Schema.Literal("superseded"),
+  }),
+  Schema.Struct({
+    ...releaseTransitionFact.fields,
+    check: name,
+    deploymentId: name,
+    deploymentState: DeploymentStateSchema,
+    kind: Schema.Literal("buildFailed"),
   }),
   releaseTransitionFact,
 ]);

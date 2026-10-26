@@ -58,7 +58,146 @@ const inspect = Effect.fn("Test.Release.inspect")(function* inspect(
   return viewRelease(yield* readRelease(jsonSnapshot(persisted)));
 });
 
+const reportTime = Arbitrary.schema(
+  Schema.Int.check(Schema.isBetween({ maximum: 10_000, minimum: 105 }))
+);
+
+const deployment = Arbitrary.schema(Schema.NonEmptyString);
+
 describe("release observation policy", () => {
+  it.effect.prop(
+    "a failed build escalates at once, restores nothing and names the deployment, for any policy and report time",
+    {
+      at: reportTime,
+      deploymentId: deployment,
+      deploymentState: Arbitrary.schema(Schema.Literals(["ERROR", "CANCELED"])),
+      generated: declarations,
+    },
+    ({ at, deploymentId, deploymentState, generated }) =>
+      Effect.gen(function* buildFailed() {
+        const checks = checksOf(generated);
+
+        for (const check of checks) {
+          for (const onFail of ["restore", "escalate"] satisfies readonly (
+            | "restore"
+            | "escalate"
+          )[]) {
+            const view = yield* inspect(
+              [
+                { ...check, onFail },
+                ...checks.filter((other) => other.name !== check.name),
+              ],
+              {
+                at,
+                check: check.name,
+                deploymentId,
+                deploymentState,
+                outcome: "build-failed",
+                type: "observed",
+              }
+            );
+
+            expect(view.state).toBe("escalated");
+            expect(view.status).toBe("done");
+            expect(view.alarmAt).toBeUndefined();
+            expect(
+              view.intents.some((intent) => intent.kind === "Restore")
+            ).toBe(false);
+            expect(view.intents.at(-1)).toEqual({
+              at,
+              cause: "observationBuildFailed",
+              check: check.name,
+              deploymentId,
+              deploymentState,
+              id: "release-synthetic/6",
+              kind: "NotifyOwner",
+            });
+            expect(view.facts.at(-1)).toMatchObject({
+              at,
+              cause: "observationBuildFailed",
+              check: check.name,
+              deploymentId,
+              deploymentState,
+              kind: "buildFailed",
+              state: "escalated",
+            });
+          }
+        }
+      })
+  );
+
+  it.effect.prop(
+    "a superseding deployment ends observation as superseded, before or after the deadline, with no restore and no page",
+    {
+      at: reportTime,
+      by: Arbitrary.schema(Schema.NonEmptyString),
+      deploymentId: deployment,
+      generated: declarations,
+    },
+    ({ at, by, deploymentId, generated }) =>
+      Effect.gen(function* superseded() {
+        const checks = checksOf(generated);
+
+        const before = viewRelease(
+          yield* readRelease(yield* observing(checks))
+        );
+
+        for (const check of checks) {
+          const view = yield* inspect(checks, {
+            at,
+            by,
+            check: check.name,
+            deploymentId,
+            outcome: "superseded",
+            type: "observed",
+          });
+
+          expect(view.state).toBe("superseded");
+          expect(view.status).toBe("done");
+          expect(view.alarmAt).toBeUndefined();
+          expect(view.intents).toEqual(before.intents);
+          expect(view.facts.at(-1)).toEqual({
+            at,
+            by,
+            cause: "observationSuperseded",
+            evidence: deploymentId,
+            kind: "superseded",
+            state: "superseded",
+          });
+        }
+      })
+  );
+
+  it.effect(
+    "build-failed and superseded words from an undeclared check change nothing",
+    () =>
+      Effect.gen(function* undeclared() {
+        const persisted = yield* observing(releaseInput.checks);
+        const before = viewRelease(yield* readRelease(persisted));
+
+        const after = yield* stepRelease(persisted, [
+          {
+            at: 105,
+            check: "unlisted",
+            deploymentId: "deployment-failed",
+            deploymentState: "ERROR",
+            outcome: "build-failed",
+            type: "observed",
+          },
+          {
+            at: 106,
+            by: "commit-newer",
+            check: "unlisted",
+            deploymentId: "deployment-newer",
+            outcome: "superseded",
+            type: "observed",
+          },
+        ]);
+
+        expect(viewRelease(yield* readRelease(after))).toEqual(before);
+      })
+  );
+
   it.effect.prop(
     "failure policy takes precedence for arbitrary deadlines and report times",
     {
