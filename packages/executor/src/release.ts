@@ -1,10 +1,22 @@
-import { ReleasePlanSchema } from "@joelhooks/piper/release-domain";
+import {
+  DeploymentStateSchema,
+  ReleasePlanSchema,
+} from "@joelhooks/piper/release-domain";
 import type {
   PostedReleaseEvent,
   ReleaseIntent,
   ReleaseReviewRequest,
 } from "@joelhooks/piper/release-domain";
-import { Clock, Context, Data, Effect, Layer, Schema, Stream } from "effect";
+import {
+  Clock,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Schema,
+  Stream,
+  Struct,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { runAdmitted } from "./admission.js";
@@ -172,12 +184,93 @@ const BaselinedSchema = Schema.Struct({
   outcome: Schema.Literals(["pass", "fail", "unknown"]),
 });
 
-const ObservedSchema = Schema.StructWithRest(
-  Schema.Struct({
-    outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
-  }),
-  [Schema.Record(Schema.String, Schema.Unknown)]
-);
+const ObservedSchema = Schema.Union([
+  Schema.StructWithRest(
+    Schema.Struct({
+      outcome: Schema.Literals(["pass", "fail", "unknown", "breach"]),
+    }),
+    [Schema.Record(Schema.String, Schema.Unknown)]
+  ),
+  Schema.StructWithRest(
+    Schema.Struct({
+      deploymentId: Schema.NonEmptyString,
+      outcome: Schema.Literal("build-failed"),
+      state: DeploymentStateSchema,
+    }),
+    [Schema.Record(Schema.String, Schema.Unknown)]
+  ),
+  Schema.StructWithRest(
+    Schema.Struct({
+      by: Schema.NonEmptyString,
+      deploymentId: Schema.NonEmptyString,
+      outcome: Schema.Literal("superseded"),
+    }),
+    [Schema.Record(Schema.String, Schema.Unknown)]
+  ),
+]);
+
+const observedEvent = (
+  at: number,
+  check: string,
+  observation: typeof ObservedSchema.Type
+): PostedReleaseEvent => {
+  const detail = Struct.omit(observation, ["outcome"]);
+
+  if (observation.outcome === "build-failed") {
+    return events.observed({
+      at,
+      check,
+      deploymentId: observation.deploymentId,
+      deploymentState: observation.state,
+      detail,
+      outcome: observation.outcome,
+    });
+  }
+
+  return observation.outcome === "superseded"
+    ? events.observed({
+        at,
+        by: observation.by,
+        check,
+        deploymentId: observation.deploymentId,
+        detail,
+        outcome: observation.outcome,
+      })
+    : events.observed({ at, check, detail, outcome: observation.outcome });
+};
+
+const notifyArgs = (
+  intent: Extract<ReleaseIntent, { readonly kind: "NotifyOwner" }>
+) => {
+  switch (intent.cause) {
+    case "observationBuildFailed": {
+      return [
+        "--cause",
+        intent.cause,
+        "--check",
+        intent.check,
+        "--deployment",
+        intent.deploymentId,
+        "--deployment-state",
+        intent.deploymentState,
+      ];
+    }
+
+    case "observationFailed":
+    case "observationPreexisting": {
+      return ["--cause", intent.cause, "--check", intent.check];
+    }
+
+    case "deployFailed":
+    case "observationExpired": {
+      return ["--cause", intent.cause];
+    }
+
+    default: {
+      return intent satisfies never;
+    }
+  }
+};
 
 export const commandLastLine = (output: string) =>
   output.trim().split("\n").at(-1) ?? "";
@@ -302,12 +395,7 @@ const runReleaseIntent = Effect.fn("Executor.release.run")(
     }
 
     if (intent.kind === "NotifyOwner") {
-      const args =
-        "check" in intent
-          ? ["--cause", intent.cause, "--check", intent.check]
-          : ["--cause", intent.cause];
-
-      const command = yield* resolve("NotifyOwner", args);
+      const command = yield* resolve("NotifyOwner", notifyArgs(intent));
 
       if (settings.mode === "dry-run") {
         return yield* record(job, [
@@ -368,7 +456,7 @@ const runReleaseIntent = Effect.fn("Executor.release.run")(
       const observations: PostedReleaseEvent[] = [];
 
       for (const { name: check } of intent.checks) {
-        const { outcome, ...detail } = yield* Effect.gen(function* observe() {
+        const observation = yield* Effect.gen(function* observe() {
           const command = yield* resolve(`Observe:${check}`, [
             "--check",
             check,
@@ -395,9 +483,7 @@ const runReleaseIntent = Effect.fn("Executor.release.run")(
 
         const observedAt = yield* Clock.currentTimeMillis;
 
-        observations.push(
-          events.observed({ at: observedAt, check, detail, outcome })
-        );
+        observations.push(observedEvent(observedAt, check, observation));
       }
 
       return completed(observations);

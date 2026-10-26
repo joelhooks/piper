@@ -1,5 +1,6 @@
 import type {
   ReleaseExpectation,
+  ReleaseFact,
   ReleaseRow,
 } from "@joelhooks/piper/release-domain";
 import { checkReleaseExpectation } from "@joelhooks/piper/release-policy";
@@ -50,6 +51,20 @@ export const codeOnlyPlan = (
       (row.kind === "resource" &&
         (row.action === "update" || row.action === "noop"))
   );
+
+export const releaseNote = (fact: ReleaseFact | undefined) => {
+  if (fact === undefined || !("kind" in fact)) {
+    return "";
+  }
+
+  if (fact.kind === "buildFailed") {
+    return `. Build ${fact.deploymentId} ended ${fact.deploymentState} and was never promoted, so production is unchanged.`;
+  }
+
+  return fact.kind === "superseded" && fact.cause === "observationSuperseded"
+    ? `. Commit ${fact.by.slice(0, 8)} in deployment ${fact.evidence} replaced it in production; nothing to restore.`
+    : "";
+};
 
 export const attemptedDeploy = (lines: readonly RunLogLine[], sha: string) =>
   lines.some(

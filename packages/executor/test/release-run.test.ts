@@ -112,6 +112,7 @@ const harness = Effect.gen(function* harness() {
     failNotify: false,
     failPreflight: false,
     invalidPlan: false,
+    line: "",
     outcome: "pass",
     planCrash: false,
     slow: false,
@@ -164,7 +165,15 @@ const harness = Effect.gen(function* harness() {
           return yield* Effect.never;
         }
 
-        return `diagnostic line\n${JSON.stringify({ evidence: `${command.command}-evidence`, outcome: controls.outcome })}\n`;
+        const line =
+          controls.line === ""
+            ? JSON.stringify({
+                evidence: `${command.command}-evidence`,
+                outcome: controls.outcome,
+              })
+            : controls.line;
+
+        return `diagnostic line\n${line}\n`;
       }
 
       return "OK";
@@ -586,6 +595,76 @@ describe("release host", () => {
   }
 
   it.effect(
+    "a failed build escalates, notifies with the deployment, pages that production is unchanged and restores nothing",
+    () =>
+      Effect.gen(function* buildFailed() {
+        const test = yield* harness;
+        test.controls.line = JSON.stringify({
+          deploymentId: "deployment-failed",
+          outcome: "build-failed",
+          state: "ERROR",
+          url: "build.sample.test",
+        });
+        yield* Effect.gen(function* run() {
+          expect((yield* fire(test)).state).toBe("escalated");
+          expect(test.calls).not.toContain("restore");
+          expect(test.calls.filter((call) => call === "notify")).toHaveLength(
+            1
+          );
+          expect(test.verdicts).toEqual([]);
+          expect(test.pages).toHaveLength(1);
+
+          for (const said of [test.pages[0], test.messages.at(-1)]) {
+            expect(said).toContain("deployment-failed");
+            expect(said).toContain("ERROR");
+            expect(said).toContain("production is unchanged");
+          }
+
+          const log = yield* RunLog;
+          expect(
+            (yield* log.lines).some(
+              (line) =>
+                Predicate.isTagged(line, "intent") &&
+                line.intent.kind === "NotifyOwner" &&
+                line.intent.cause === "observationBuildFailed"
+            )
+          ).toBe(true);
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect(
+    "a superseding deployment ends the release as superseded, naming the newer commit, with no restore, notification or page",
+    () =>
+      Effect.gen(function* superseded() {
+        const test = yield* harness;
+        test.controls.line = JSON.stringify({
+          by: "0123456789abcdef0123456789abcdef01234567",
+          deploymentId: "deployment-newer",
+          outcome: "superseded",
+        });
+        yield* Effect.gen(function* run() {
+          expect((yield* fire(test)).state).toBe("superseded");
+          expect(test.calls).not.toContain("restore");
+          expect(test.calls).not.toContain("notify");
+          expect(test.pages).toEqual([]);
+          expect(test.verdicts).toEqual([]);
+          const finished = test.messages.at(-1);
+
+          expect(finished).toMatch(/^finished: superseded\. /u);
+
+          for (const said of [
+            "01234567",
+            "deployment-newer",
+            "nothing to restore",
+          ]) {
+            expect(finished).toContain(said);
+          }
+        }).pipe(Effect.provide(test.layer));
+      })
+  );
+
+  it.effect(
     "each check stops at its own deadline while the release deadline remains bounded",
     () =>
       Effect.gen(function* checkDeadlines() {
@@ -781,6 +860,7 @@ describe("release host", () => {
           readonly config: ReleaseConfig;
           readonly final: string;
           readonly options: ReleaseRunOptions;
+          readonly line?: string;
           readonly outcome: "pass" | "fail" | "unknown";
         }[] = [
           {
@@ -798,6 +878,17 @@ describe("release host", () => {
           { config, final: "accepted", options, outcome: "pass" },
           { config, final: "restored", options, outcome: "fail" },
           { config, final: "escalated", options, outcome: "unknown" },
+          {
+            config,
+            final: "superseded",
+            line: JSON.stringify({
+              by: "commit-newer",
+              deploymentId: "deployment-newer",
+              outcome: "superseded",
+            }),
+            options,
+            outcome: "pass",
+          },
           { config, final: "held", options: heldOptions, outcome: "pass" },
           {
             config: reviewConfig,
@@ -837,6 +928,7 @@ describe("release host", () => {
         for (const scenario of scenarios) {
           const test = yield* harness;
           test.controls.outcome = scenario.outcome;
+          test.controls.line = scenario.line ?? "";
           yield* Effect.gen(function* trace() {
             yield* ready(scenario.config);
 
@@ -897,6 +989,7 @@ describe("release host", () => {
           "rehearsed",
           "restored",
           "reviewHeld",
+          "superseded",
         ]);
         expect([...new Set(states)].toSorted()).toEqual([
           "accepted",
@@ -921,6 +1014,7 @@ describe("release host", () => {
           "restoring",
           "reviewHeld",
           "reviewing",
+          "superseded",
         ]);
       })
   );

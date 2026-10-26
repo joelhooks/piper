@@ -76,10 +76,11 @@ const Step = Schema.Struct({
   check: Schema.Literals(["availability", "integrity", "latency"]),
   dt: between(-2, 4),
   kind: Schema.Literals(Struct.keys(ReleaseEvents)),
-  observed: ReleaseEvents.observed.fields.outcome,
+  observed: Schema.Literals(["pass", "fail", "unknown", "breach"]),
   operation: ReleaseEvents.failed.fields.operation,
   owner: Schema.Boolean,
   pick: between(0, 5),
+  releaseWord: between(0, 15),
   rows: Schema.Array(Row).check(Schema.isMaxLength(2)),
   verdict: ReleaseEvents.reviewed.fields.verdict,
   window: between(0, 60),
@@ -177,6 +178,22 @@ const ENTRY_EVENTS: readonly EventFromLogic<typeof releaseMachine>[] = [
     { at: T0, check, outcome: "pass", type: "observed" },
     { at: T0, check, outcome: "fail", type: "observed" },
     { at: T0, check, outcome: "breach", type: "observed" },
+    {
+      at: T0,
+      check,
+      deploymentId: "deployment-failed",
+      deploymentState: "ERROR",
+      outcome: "build-failed",
+      type: "observed",
+    },
+    {
+      at: T0,
+      by: "commit-newer",
+      check,
+      deploymentId: "deployment-newer",
+      outcome: "superseded",
+      type: "observed",
+    },
   ]),
   { at: T0, type: "deployed" },
   {
@@ -292,12 +309,31 @@ const build = {
     type: "failed",
   }),
   fire: (_, at) => ({ at, by: OPERATOR, type: "fire" }),
-  observed: (step, at) => ({
-    at,
-    check: step.check,
-    outcome: step.observed,
-    type: "observed",
-  }),
+  observed: (step, at) => {
+    const { check } = step;
+
+    if (step.releaseWord === 0) {
+      return {
+        at,
+        check,
+        deploymentId: "deployment-failed",
+        deploymentState: step.owner ? "ERROR" : "CANCELED",
+        outcome: "build-failed",
+        type: "observed",
+      };
+    }
+
+    return step.releaseWord === 1
+      ? {
+          at,
+          by: "commit-newer",
+          check,
+          deploymentId: "deployment-newer",
+          outcome: "superseded",
+          type: "observed",
+        }
+      : { at, check, outcome: step.observed, type: "observed" };
+  },
   override: (step, at) => ({
     at,
     by: step.owner ? OWNER : OPERATOR,
@@ -475,7 +511,7 @@ describe("release lifecycle model", () => {
   it.effect("the generator reaches every rule the model encodes", () =>
     Effect.gen(function* coverage() {
       const samples = yield* Arbitrary.sampleEffect(Arbitrary.all(histories), {
-        count: 400,
+        count: 1000,
         seed: 17,
       }).pipe(Effect.orDie);
 

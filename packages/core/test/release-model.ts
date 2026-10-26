@@ -59,6 +59,8 @@ export const RULES = [
   "preexistingEscalates",
   "failureRestores",
   "failureEscalates",
+  "buildFailedEscalates",
+  "observationSuperseded",
   "lateObservationEscalates",
   "observed",
   "accepted",
@@ -162,6 +164,25 @@ const restore = (model: ReleaseModel, at: number, cause: string) =>
     at,
     cause
   );
+
+const supersede = (
+  model: ReleaseModel,
+  successor: {
+    readonly at: number;
+    readonly by: string;
+    readonly cause: string;
+    readonly evidence: string;
+  }
+): ReleaseModel => ({
+  ...model,
+  clock: successor.at,
+  deadline: undefined,
+  facts: [
+    ...model.facts,
+    { ...successor, kind: "superseded", state: "superseded" },
+  ],
+  state: "superseded",
+});
 
 const declared = (model: ReleaseModel, check: string) =>
   model.input.checks.find((declaration) => declaration.name === check);
@@ -413,6 +434,50 @@ const observe = (
         );
   }
 
+  if (event.outcome === "build-failed") {
+    const { at, check, deploymentId, deploymentState } = event;
+
+    return step(
+      {
+        ...emit(model, at, {
+          cause: "observationBuildFailed",
+          check,
+          deploymentId,
+          deploymentState,
+          kind: "NotifyOwner",
+        }),
+        clock: at,
+        facts: [
+          ...model.facts,
+          {
+            at,
+            cause: "observationBuildFailed",
+            check,
+            deploymentId,
+            deploymentState,
+            kind: "buildFailed",
+            offending: model.offending,
+            state: "escalated",
+          },
+        ],
+        state: "escalated",
+      },
+      "buildFailedEscalates"
+    );
+  }
+
+  if (event.outcome === "superseded") {
+    return step(
+      supersede(model, {
+        at: event.at,
+        by: event.by,
+        cause: "observationSuperseded",
+        evidence: event.deploymentId,
+      }),
+      "observationSuperseded"
+    );
+  }
+
   if (model.deadline !== undefined && event.at >= model.deadline) {
     return step(
       escalate(model, event.at, {
@@ -462,23 +527,12 @@ const observing: Handler = (model, event) => {
   }
 
   return step(
-    {
-      ...model,
-      clock: event.at,
-      deadline: undefined,
-      facts: [
-        ...model.facts,
-        {
-          at: event.at,
-          by: event.by,
-          cause: "superseded",
-          evidence: event.evidence,
-          kind: "superseded",
-          state: "superseded",
-        },
-      ],
-      state: "superseded",
-    },
+    supersede(model, {
+      at: event.at,
+      by: event.by,
+      cause: "superseded",
+      evidence: event.evidence,
+    }),
     "superseded"
   );
 };
