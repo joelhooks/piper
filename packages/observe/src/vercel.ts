@@ -38,7 +38,9 @@ const DeploymentsSchema = Schema.Struct({
 });
 
 const TargetSchema = Schema.Struct({
+  createdAt: Schema.optionalKey(Schema.Finite),
   id: Schema.String,
+  meta: Schema.optionalKey(GitMetaSchema),
   readyState: ReadyState,
   url: Schema.String,
 });
@@ -63,6 +65,11 @@ const vercelGet = (
     HttpClientRequest.bearerToken(token),
     HttpClientRequest.acceptJson
   );
+
+export const targetCommit = (target: Target) =>
+  target.meta?.githubCommitSha ??
+  target.meta?.gitlabCommitSha ??
+  target.meta?.bitbucketCommitSha;
 
 const builtFrom = (deployment: Deployment, sha: string) =>
   [

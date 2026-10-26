@@ -2,7 +2,11 @@ import { describe, expect, it } from "@effect/vitest";
 import { Schema } from "effect";
 import * as Arbitrary from "effect/Arbitrary";
 
-import { errorsVerdict } from "../src/policy.js";
+import {
+  deploymentVerdict,
+  errorsVerdict,
+  isSuperseded,
+} from "../src/policy.js";
 
 const errorCount = Schema.Int.check(
   Schema.isBetween({ maximum: 30, minimum: 0 })
@@ -58,6 +62,76 @@ const verdict = (sample: Sample, afterErrors = sample.afterErrors) =>
       requests: sample.afterRequests,
     }
   );
+
+describe("deployment verdict", () => {
+  it.prop(
+    "only failed builds are build-failed and only a serving READY deploy passes",
+    {
+      serving: Arbitrary.schema(Schema.Boolean),
+      state: Arbitrary.schema(
+        Schema.Literals([
+          "BLOCKED",
+          "BUILDING",
+          "CANCELED",
+          "DELETED",
+          "ERROR",
+          "INITIALIZING",
+          "QUEUED",
+          "READY",
+        ])
+      ),
+    },
+    ({ serving, state }) => {
+      const outcome = deploymentVerdict(state, serving);
+
+      expect(outcome === "build-failed").toBe(
+        ["ERROR", "CANCELED"].includes(state)
+      );
+      expect(outcome === "pass").toBe(state === "READY" && serving);
+      expect(outcome === "unknown").toBe(
+        !["ERROR", "CANCELED"].includes(state) &&
+          !(state === "READY" && serving)
+      );
+    }
+  );
+
+  it.prop(
+    "supersession needs a different, strictly newer target and proven ancestry",
+    {
+      history: Arbitrary.schema(
+        Schema.Array(
+          Schema.Struct({
+            contains: Schema.Literals(["yes", "no", "unknown"]),
+            distance: minimum,
+            position: Schema.Literals(["older", "concurrent", "newer"]),
+            sameId: Schema.Boolean,
+          })
+        ).check(Schema.isMinLength(1))
+      ),
+      releaseCreated: Arbitrary.schema(errorCount),
+    },
+    ({ history, releaseCreated }) => {
+      for (const { contains, distance, position, sameId } of history) {
+        const offset = { concurrent: 0, newer: distance, older: -distance }[
+          position
+        ];
+
+        const result = isSuperseded(
+          { created: releaseCreated, id: "dpl_release" },
+          {
+            created: releaseCreated + offset,
+            id: sameId ? "dpl_release" : "dpl_target",
+          },
+          contains
+        );
+
+        expect(result).toBe(
+          position === "newer" && !sameId && contains === "yes"
+        );
+      }
+    }
+  );
+});
 
 describe("errors verdict", () => {
   it("passes a rate spike that stays exactly at the hard floor", () => {

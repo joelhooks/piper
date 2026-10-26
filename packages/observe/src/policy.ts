@@ -1,4 +1,4 @@
-import type { AxiomSettings, Canary, Counts } from "./domain.js";
+import type { AxiomSettings, Canary, Containment, Counts } from "./domain.js";
 
 export interface Span {
   readonly end: number;
@@ -36,16 +36,35 @@ export const errorsVerdict = (
     : "pass";
 };
 
+export const isFailedBuild = (state: string): state is "ERROR" | "CANCELED" =>
+  state === "ERROR" || state === "CANCELED";
+
 export const deploymentVerdict = (
   state: string,
   serving: boolean
-): "pass" | "fail" | "unknown" => {
-  if (state === "ERROR" || state === "CANCELED") {
-    return "fail";
+): "pass" | "build-failed" | "unknown" => {
+  if (isFailedBuild(state)) {
+    return "build-failed";
   }
 
   return state === "READY" && serving ? "pass" : "unknown";
 };
+
+interface DeploymentPosition {
+  readonly created: number;
+  readonly id: string;
+}
+
+export const isNewerDeployment = (
+  release: DeploymentPosition,
+  target: DeploymentPosition
+): boolean => target.id !== release.id && target.created > release.created;
+
+export const isSuperseded = (
+  release: DeploymentPosition,
+  target: DeploymentPosition,
+  contains: Containment
+): boolean => isNewerDeployment(release, target) && contains === "yes";
 
 export const canaryMismatch = (
   canary: Canary,
