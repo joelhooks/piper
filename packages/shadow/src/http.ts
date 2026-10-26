@@ -1,6 +1,7 @@
 import { ExecutorError } from "@joelhooks/piper-executor/domain";
 import { GitHub } from "@joelhooks/piper-executor/github";
 import { TokenProvider } from "@joelhooks/piper-executor/token";
+import { retryAfterDelay } from "@joelhooks/piper-executor/transport";
 import {
   Clock,
   Context,
@@ -32,21 +33,7 @@ const transientReadRetry = Schedule.max([
 
 const transientStatuses: ReadonlySet<number> = new Set([502, 503, 504]);
 
-export const retryDelay = (header: string | undefined, now: number): number => {
-  if (header === undefined) {
-    return 60_000;
-  }
-
-  const seconds = Number(header);
-
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return seconds * 1000;
-  }
-
-  const date = Date.parse(header);
-
-  return Number.isFinite(date) ? Math.max(0, date - now) : 60_000;
-};
+export const retryDelay = retryAfterDelay;
 
 export const belowBudget = (
   remaining: string | undefined,
