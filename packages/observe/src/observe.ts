@@ -2,6 +2,7 @@ import { Clock, Data, Effect, Match, Option, pipe } from "effect";
 import type { Redacted } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
+import { CommitContains } from "./ancestry.js";
 import { countRequests, iso } from "./axiom.js";
 import type {
   Canary,
@@ -10,6 +11,7 @@ import type {
   Observation,
   ObserveConfig,
   Phase,
+  ReleaseOutcome,
 } from "./domain.js";
 import { optionalToken, requireToken } from "./http.js";
 import {
@@ -17,17 +19,21 @@ import {
   deploymentVerdict,
   errorsVerdict,
   errorWindows,
+  isFailedBuild,
+  isNewerDeployment,
+  isSuperseded,
 } from "./policy.js";
-import { productionTarget, releaseDeployment } from "./vercel.js";
+import { productionTarget, releaseDeployment, targetCommit } from "./vercel.js";
 import type { Deployment } from "./vercel.js";
 
 type Release = Data.TaggedEnum<{
   Absent: { readonly sha: string };
   Judged: {
     readonly deployment: Deployment;
-    readonly outcome: "fail" | "unknown";
+    readonly outcome: "unknown";
   };
   Serving: { readonly deployment: Deployment; readonly readyAt: number };
+  Terminal: { readonly observation: ReleaseOutcome };
 }>;
 
 const releases = Data.taggedEnum<Release>();
@@ -55,12 +61,56 @@ const inspectRelease = Effect.fn("Observe.inspectRelease")(
 
     const deployment = found.value;
 
-    const serving =
-      deployment.readyState === "READY" &&
-      Option.exists(
-        yield* productionTarget(config, token),
-        (target) => target.id === deployment.uid
-      );
+    if (isFailedBuild(deployment.readyState)) {
+      return releases.Terminal({
+        observation: {
+          deploymentId: deployment.uid,
+          outcome: "build-failed",
+          state: deployment.readyState,
+          url: deployment.url ?? "",
+        },
+      });
+    }
+
+    const target = yield* productionTarget(config, token);
+
+    const serving = Option.exists(
+      target,
+      (current) => current.id === deployment.uid
+    );
+
+    if (Option.isSome(target) && target.value.readyState === "READY") {
+      const current = target.value;
+      const by = targetCommit(current);
+
+      if (
+        by !== undefined &&
+        current.createdAt !== undefined &&
+        isNewerDeployment(
+          { created: deployment.created, id: deployment.uid },
+          { created: current.createdAt, id: current.id }
+        )
+      ) {
+        const contains = yield* CommitContains;
+        const ancestry = yield* contains(config.sha, by);
+
+        if (
+          isSuperseded(
+            { created: deployment.created, id: deployment.uid },
+            { created: current.createdAt, id: current.id },
+            ancestry
+          )
+        ) {
+          return releases.Terminal({
+            observation: {
+              by,
+              deploymentId: current.id,
+              outcome: "superseded",
+            },
+          });
+        }
+      }
+    }
 
     const verdict = deploymentVerdict(deployment.readyState, serving);
 
@@ -68,7 +118,7 @@ const inspectRelease = Effect.fn("Observe.inspectRelease")(
       ? releases.Serving({ deployment, readyAt: deployment.ready })
       : releases.Judged({
           deployment,
-          outcome: verdict === "fail" ? "fail" : "unknown",
+          outcome: "unknown",
         });
   }
 );
@@ -105,6 +155,7 @@ const readback = Effect.fn("Observe.readback")(function* readback(
       readyAt: iso(readyAt),
       url: deployment.url ?? "",
     }),
+    Terminal: ({ observation }) => observation,
   });
 });
 
@@ -135,13 +186,17 @@ const errors = Effect.fn("Observe.errors")(function* errors(
   }
 
   const vercel = yield* requireToken("VERCEL_TOKEN");
-  const access = yield* axiomAccess;
   const release = yield* inspectRelease(config, vercel);
+
+  if (releases.$is("Terminal")(release)) {
+    return release.observation;
+  }
 
   if (!releases.$is("Serving")(release)) {
     return unknown("the release is not serving production yet");
   }
 
+  const access = yield* axiomAccess;
   const windows = errorWindows(release.readyAt, config.axiom.windowMinutes);
 
   if ((yield* Clock.currentTimeMillis) < windows.after.end) {

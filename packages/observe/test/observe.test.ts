@@ -2,10 +2,13 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
+import { CommitContains } from "../src/ancestry.js";
 import { iso } from "../src/axiom.js";
 import { decodeConfig } from "../src/config.js";
+import type { Containment } from "../src/domain.js";
 import type { TokenName } from "../src/http.js";
 import { observe, render } from "../src/observe.js";
+import type { Target } from "../src/vercel.js";
 import {
   config,
   environment,
@@ -49,14 +52,14 @@ const deployment = (
     ? { ...building(readyState, uid, created), ready: readyAt }
     : building(readyState, uid, created);
 
-const serving = (uid: string, readyState = "READY") => ({
+const serving = (uid: string, readyState: Target["readyState"] = "READY") => ({
   createdAt: readyAt - 60_000,
   id: uid,
   readyState,
   url: `${uid}.sample.test`,
 });
 
-const project = (production?: ReturnType<typeof serving>) => ({
+const project = (production?: Target) => ({
   id: "prj_synthetic",
   name: "sample",
   targets: production === undefined ? {} : { production },
@@ -84,6 +87,7 @@ const counts = (requests: number, errors: number, isPartial = false) => ({
 });
 
 interface Scene {
+  readonly contains?: Containment | undefined;
   readonly deployments?: Reply;
   readonly project?: Reply;
   readonly before?: Reply;
@@ -130,7 +134,20 @@ const run = (
 
     const observation = yield* observe(config, check, phase).pipe(
       Effect.provide(
-        Layer.mergeAll(fakeHttp(sent, route(scene)), environment(values))
+        Layer.mergeAll(
+          fakeHttp(sent, route(scene)),
+          environment(values),
+          scene.contains === undefined
+            ? Layer.empty
+            : Layer.succeed(CommitContains, (ancestor, descendant) => {
+                expect(ancestor).toBe(sha);
+                expect(descendant).toBe(
+                  "abcdef0123456789abcdef0123456789abcdef0123"
+                );
+
+                return Effect.succeed(scene.contains ?? "unknown");
+              })
+        )
       )
     );
 
@@ -290,19 +307,21 @@ describe("readback", () => {
     })
   );
 
-  it.effect.each(["ERROR", "CANCELED"])("fails on %s", (state) =>
-    Effect.gen(function* test() {
-      const { observation } = yield* run(
-        { deployments: json(listed(deployment(state))) },
-        "readback"
-      );
+  it.effect.each(["ERROR", "CANCELED"])(
+    "reports a failed build on %s",
+    (state) =>
+      Effect.gen(function* test() {
+        const { observation } = yield* run(
+          { deployments: json(listed(deployment(state))) },
+          "readback"
+        );
 
-      expect(observation).toMatchObject({
-        deploymentId: "dpl_new",
-        outcome: "fail",
-        state,
-      });
-    })
+        expect(observation).toMatchObject({
+          deploymentId: "dpl_new",
+          outcome: "build-failed",
+          state,
+        });
+      })
   );
 
   it.effect("is unknown with a reason when VERCEL_TOKEN is missing", () =>
@@ -378,6 +397,156 @@ describe("readback", () => {
 
       expect(observation.outcome).toBe("unknown");
     })
+  );
+});
+
+describe("release outcomes", () => {
+  const checks: readonly ("readback" | "errors")[] = ["readback", "errors"];
+
+  const answers: readonly (Containment | undefined)[] = [
+    "yes",
+    "no",
+    "unknown",
+    undefined,
+  ];
+
+  it.effect.each(checks)(
+    "%s reports failed builds without requiring Axiom or production readback",
+    (check) =>
+      Effect.gen(function* test() {
+        for (const state of ["ERROR", "CANCELED"]) {
+          const { observation, sent } = yield* run(
+            { deployments: json(listed(deployment(state))), project: offline },
+            check,
+            "release",
+            { VERCEL_TOKEN: tokens.VERCEL_TOKEN }
+          );
+
+          expect(observation).toEqual({
+            deploymentId: "dpl_new",
+            outcome: "build-failed",
+            state,
+            url: "dpl_new.sample.test",
+          });
+          expect(sent).toHaveLength(1);
+          expect(JSON.parse(render(observation))).toMatchObject({
+            deploymentId: "dpl_new",
+            outcome: "build-failed",
+            state,
+          });
+        }
+      })
+  );
+
+  it.effect.each(checks)(
+    "%s reports supersession only with complete evidence",
+    (check) =>
+      Effect.gen(function* test() {
+        for (const contains of answers) {
+          const target = {
+            ...serving("dpl_later"),
+            createdAt: readyAt,
+            meta: {
+              githubCommitSha: "abcdef0123456789abcdef0123456789abcdef0123",
+            },
+          };
+
+          const { observation, sent } = yield* run(
+            {
+              contains,
+              deployments: json(listed(deployment("READY"))),
+              project: json(project(target)),
+            },
+            check,
+            "release",
+            { VERCEL_TOKEN: tokens.VERCEL_TOKEN }
+          );
+
+          if (contains === "yes") {
+            expect(observation).toEqual({
+              by: target.meta.githubCommitSha,
+              deploymentId: "dpl_later",
+              outcome: "superseded",
+            });
+            expect(JSON.parse(render(observation))).toEqual(observation);
+          } else {
+            expect(observation.outcome).toBe("unknown");
+          }
+
+          expect(
+            sent.some((request) => request.url.host === "api.axiom.co")
+          ).toBe(false);
+        }
+      })
+  );
+
+  it.effect.each(checks)(
+    "%s can supersede an unfinished build but never conceals a failed build",
+    (check) =>
+      Effect.gen(function* test() {
+        for (const state of ["BUILDING", "ERROR", "CANCELED"]) {
+          const { observation } = yield* run(
+            {
+              contains: "yes",
+              deployments: json(listed(deployment(state))),
+              project: json(
+                project({
+                  ...serving("dpl_later"),
+                  createdAt: readyAt,
+                  meta: {
+                    githubCommitSha:
+                      "abcdef0123456789abcdef0123456789abcdef0123",
+                  },
+                })
+              ),
+            },
+            check,
+            "release",
+            { VERCEL_TOKEN: tokens.VERCEL_TOKEN }
+          );
+
+          expect(observation.outcome).toBe(
+            state === "BUILDING" ? "superseded" : "build-failed"
+          );
+        }
+      })
+  );
+
+  it.effect.each(checks)(
+    "%s does not mistake old, equal-time, incomplete or unready targets for replacements",
+    (check) =>
+      Effect.gen(function* test() {
+        for (const target of [
+          {
+            ...serving("dpl_later"),
+            createdAt: readyAt - 120_000,
+            meta: { githubCommitSha: sha },
+          },
+          {
+            ...serving("dpl_later"),
+            createdAt: readyAt - 60_000,
+            meta: { githubCommitSha: sha },
+          },
+          { ...serving("dpl_later"), createdAt: readyAt },
+          { ...serving("dpl_later"), meta: { githubCommitSha: sha } },
+          {
+            ...serving("dpl_later", "BUILDING"),
+            createdAt: readyAt,
+            meta: { githubCommitSha: sha },
+          },
+        ]) {
+          const { observation } = yield* run(
+            {
+              contains: "yes",
+              deployments: json(listed(deployment("READY"))),
+              project: json(project(target)),
+            },
+            check
+          );
+
+          expect(observation.outcome).toBe("unknown");
+        }
+      })
   );
 });
 

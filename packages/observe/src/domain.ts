@@ -60,7 +60,23 @@ export interface CanaryFailure {
   readonly url: string;
 }
 
+export type Containment = "yes" | "no" | "unknown";
+
+export type ReleaseOutcome =
+  | {
+      readonly deploymentId: string;
+      readonly outcome: "build-failed";
+      readonly state: "ERROR" | "CANCELED";
+      readonly url: string;
+    }
+  | {
+      readonly by: string;
+      readonly deploymentId: string;
+      readonly outcome: "superseded";
+    };
+
 export type Observation =
+  | ReleaseOutcome
   | { readonly outcome: "unknown"; readonly reason: string }
   | {
       readonly deploymentId: string;
