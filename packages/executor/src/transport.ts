@@ -11,6 +11,29 @@ export interface Request {
   readonly body?: Write["body"];
 }
 
+const defaultRetryAfterMs = 60_000;
+
+export const retryAfterDelay = (
+  header: string | undefined,
+  now: number
+): number => {
+  if (header === undefined || header.trim() === "") {
+    return defaultRetryAfterMs;
+  }
+
+  const seconds = Number(header);
+
+  if (!Number.isNaN(seconds)) {
+    const delay = seconds * 1000;
+
+    return Number.isFinite(delay) && delay >= 0 ? delay : defaultRetryAfterMs;
+  }
+
+  const date = Date.parse(header);
+
+  return Number.isFinite(date) ? Math.max(0, date - now) : defaultRetryAfterMs;
+};
+
 export class Transport extends Context.Service<
   Transport,
   {
@@ -62,14 +85,14 @@ export class Transport extends Context.Service<
             );
 
           if (response.status === 403 || response.status === 429) {
-            const seconds = Number(response.headers["retry-after"] ?? "60");
+            const refusedAt = yield* Clock.currentTimeMillis;
 
             const retryAfterMs = Math.max(
-              60_000,
-              Number.isFinite(seconds) ? seconds * 1000 : 60_000
+              defaultRetryAfterMs,
+              retryAfterDelay(response.headers["retry-after"], refusedAt)
             );
 
-            next = (yield* Clock.currentTimeMillis) + retryAfterMs;
+            next = refusedAt + retryAfterMs;
 
             return yield* new ExecutorError({
               code: "secondary-limit",

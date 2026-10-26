@@ -158,7 +158,9 @@ export class ExecutorError extends Schema.TaggedError<ExecutorError>()(
       "configuration",
     ]),
     message: Schema.String,
-    retryAfterMs: Schema.optionalKey(Schema.Number),
+    retryAfterMs: Schema.optionalKey(
+      Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+    ),
   }
 ) {}
 
