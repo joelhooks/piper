@@ -61,6 +61,107 @@ export class Rules {
     Rules.mergingMain(before, event, after);
     Rules.alarmDeadline(before, event, after);
     Rules.dueTick(before, event, after);
+    Rules.conflictHandBack(before, event, after);
+    Rules.headMovedHandBack(before, event, after);
+  }
+
+  static headMovedHandBack(
+    before: TrainSnapshot,
+    event: TrainEvent,
+    after: TrainSnapshot
+  ) {
+    if (event.type !== "carHeadMoved") {
+      return;
+    }
+
+    const car = before.context.cars.find((entry) => entry.number === event.pr);
+
+    if (
+      car === undefined ||
+      car.headSha !== event.admittedHead ||
+      event.actualHead === event.admittedHead
+    ) {
+      expect({ ...after.context, sync: before.context.sync }).toEqual(
+        before.context
+      );
+
+      return;
+    }
+
+    const fresh = after.context.intents.slice(before.context.intents.length);
+
+    if (before.context.intents.some((intent) => intent.kind === "Merge")) {
+      expect(stateName(after)).toBe("abandoned");
+      expect(fresh.filter((intent) => intent.kind === "BuildTrain")).toEqual(
+        []
+      );
+
+      return;
+    }
+
+    const remaining = before.context.cars.filter(
+      (entry) => entry.number !== event.pr
+    );
+
+    expect(after.context.cars).toEqual(remaining);
+    expect(
+      fresh
+        .filter((intent) => intent.kind === "NotifyOwner")
+        .map((intent) => intent.car)
+    ).toEqual([car]);
+
+    if (remaining.length === 0) {
+      expect(stateName(after)).toBe("abandoned");
+    } else {
+      expect(stateName(after)).toBe("building");
+      expect(buildsOf(fresh).map((intent) => intent.cars)).toEqual([remaining]);
+      expect(after.context.head).toBeUndefined();
+      expect(after.context.go).toBeUndefined();
+      expect(after.context.checks).toEqual([]);
+    }
+  }
+
+  static conflictHandBack(
+    before: TrainSnapshot,
+    event: TrainEvent,
+    after: TrainSnapshot
+  ) {
+    const { build } = before.context;
+
+    if (
+      event.type !== "built" ||
+      build?.id !== event.buildId ||
+      !["building", "bisecting.building"].includes(stateName(before))
+    ) {
+      return;
+    }
+
+    const expected = build.cars.filter(
+      (car) =>
+        event.conflicted.includes(car.number) ||
+        !event.merged.includes(car.number)
+    );
+
+    const fresh = after.context.intents.slice(before.context.intents.length);
+
+    expect(
+      fresh
+        .filter((intent) => intent.kind === "NotifyOwner")
+        .map((intent) => intent.car.number)
+    ).toEqual(expected.map((car) => car.number));
+
+    for (const car of expected) {
+      expect(after.context.cars.map((entry) => entry.number)).not.toContain(
+        car.number
+      );
+      expect(fresh).toContainEqual(
+        expect.objectContaining({
+          car,
+          kind: "NotifyOwner",
+          reason: "conflict",
+        })
+      );
+    }
   }
   outbox(before: TrainSnapshot, event: TrainEvent, after: TrainSnapshot) {
     expect(

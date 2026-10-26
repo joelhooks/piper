@@ -13,6 +13,7 @@ export interface MetricsOptions {
 const rebuildCounts = () => ({
   bisected: 0,
   conflict: 0,
+  "head-moved": 0,
   "main-moved": 0,
   "merge-refused": 0,
 });
@@ -40,6 +41,7 @@ const causes: readonly (keyof ReturnType<typeof rebuildCounts>)[] = [
   "merge-refused",
   "bisected",
   "conflict",
+  "head-moved",
 ];
 
 const outcomeNames: readonly SoloOutcome[] = [

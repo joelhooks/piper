@@ -35,6 +35,7 @@ const TrainMeasurements = Schema.Struct({
   rebuilds: Schema.Struct({
     bisected: Count,
     conflict: Count,
+    "head-moved": Count,
     "main-moved": Count,
     "merge-refused": Count,
   }),

@@ -20,6 +20,18 @@ import {
 } from "./train-tasks.js";
 import type { RunnerContext } from "./train-tasks.js";
 
+export {
+  CarAdmissionStatusSchema,
+  CarStillAdmitted,
+  CarStillAdmittedDefault,
+  carAdmissionStatuses,
+} from "./car-admission.js";
+
+export type {
+  CarAdmissionRequest,
+  CarAdmissionStatus,
+} from "./car-admission.js";
+
 const preparing = createEffectLogic({
   effect: ({ input }) => prepareTrain(input),
   schemas: { input: types<RunnerContext>() },

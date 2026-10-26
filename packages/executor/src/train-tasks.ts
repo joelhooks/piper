@@ -22,6 +22,7 @@ import {
 } from "effect";
 
 import { decode } from "./boundary.js";
+import { CarStillAdmitted } from "./car-admission.js";
 import type { ExecutorError, Job } from "./domain.js";
 import { execute, readChecks } from "./execute.js";
 import { GitHub } from "./github.js";
@@ -336,15 +337,40 @@ const poll = Effect.fn("Train.poll")(function* poll(
   );
 
   if (pull.head.sha !== admission.car.headSha) {
-    return {
+    const moved = yield* stepTrain(train, [
+      {
+        actualHead: pull.head.sha,
+        admittedHead: admission.car.headSha,
+        at: yield* Clock.currentTimeMillis,
+        pr: admission.car.number,
+        type: "carHeadMoved",
+      },
+    ]);
+
+    const reason = `car head moved from ${admission.car.headSha} to ${pull.head.sha}`;
+
+    const dispatched = snapshot.context.intents.some(
+      (intent) => intent.kind === "Merge"
+    );
+
+    const next = {
       ...context,
       stop: stops.CarMoved({
         detail: { actual: pull.head.sha, admitted: admission.car.headSha },
         harm: "landing a head nobody reviewed",
-        next: "name the new head",
-        stop: "car head moved",
+        next: dispatched
+          ? "inspect the merge before rebuilding"
+          : "name the new head",
+        stop: dispatched
+          ? `${reason}; whole train handed back because merge already dispatched`
+          : reason,
       }),
+      train: moved,
     };
+
+    yield* save(next);
+
+    return next;
   }
 
   const at = yield* Clock.currentTimeMillis;
@@ -429,6 +455,43 @@ const drain = Effect.fn("Train.drain")(function* drain(
 
   if (refusal !== undefined) {
     return { ...context, stop: refusal };
+  }
+
+  if (intent.kind === "Merge" && admission.mode === "live") {
+    const port = yield* CarStillAdmitted;
+
+    const revoked: {
+      readonly car: TrainAdmission["car"];
+      readonly reason: string;
+    }[] = [];
+
+    for (const car of snapshot.context.cars) {
+      const status = yield* port.check({
+        car,
+        repo: admission.repo,
+        train: admission.train,
+      });
+
+      yield* recordTrain({ admission: status, car });
+
+      if (Predicate.isTagged(status, "Revoked")) {
+        revoked.push({ car, reason: status.reason });
+      }
+    }
+
+    const [first] = revoked;
+
+    if (first !== undefined) {
+      return {
+        ...context,
+        stop: stops.GoRevoked({
+          detail: revoked,
+          harm: "landing a car its owner no longer approves",
+          next: "get a new GO from the owner, then board the car again",
+          stop: `GO revoked for car #${first.car.number}: ${first.reason}`,
+        }),
+      };
+    }
   }
 
   if (intent.kind === "RerunChecks") {
