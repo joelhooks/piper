@@ -7,6 +7,8 @@ import {
 } from "@joelhooks/piper/domain";
 import { Schema } from "effect";
 
+import { CarAdmissionStatusSchema } from "./car-admission.js";
+
 export const TrainAdmissionSchema = Schema.Struct({
   baseBranch: Schema.NonEmptyString,
   car: Schema.Struct({ headSha: Sha, number: PrNumber }),
@@ -33,6 +35,8 @@ export const TrainStopSchema = Schema.Union([
   Schema.TaggedStruct("TrainEnded", refusal),
   Schema.TaggedStruct("BaseMoved", refusal),
   Schema.TaggedStruct("CarMoved", refusal),
+  Schema.TaggedStruct("Conflict", refusal),
+  Schema.TaggedStruct("GoRevoked", refusal),
   Schema.TaggedStruct("NotBoarded", refusal),
   Schema.TaggedStruct("OutsideAdmission", refusal),
   Schema.TaggedStruct("RealRed", refusal),
@@ -49,6 +53,11 @@ export type TrainStop = typeof TrainStopSchema.Type;
 const timestamp = { at: Schema.String };
 
 export const TrainRecord = Schema.Union([
+  Schema.Struct({
+    ...timestamp,
+    admission: CarAdmissionStatusSchema,
+    car: TrainAdmissionSchema.fields.car,
+  }),
   Schema.Struct({
     ...timestamp,
     car: TrainAdmissionSchema.fields.car,

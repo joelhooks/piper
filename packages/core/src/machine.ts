@@ -52,7 +52,7 @@ export interface Bisect {
 
 export interface Drop {
   readonly car: Car;
-  readonly reason: "conflict" | "culprit";
+  readonly reason: "conflict" | "culprit" | "head-moved";
   readonly at: number;
 }
 
@@ -330,7 +330,7 @@ const dropCars = (
   context: TrainContext,
   at: number,
   numbers: readonly number[],
-  reason: "conflict" | "culprit",
+  reason: "conflict" | "culprit" | "head-moved",
   excerpt: string
 ): TrainContext => {
   const leaving = context.cars.filter((car) => numbers.includes(car.number));
@@ -365,7 +365,7 @@ const dropCars = (
 const continueWithout = (
   context: TrainContext,
   at: number,
-  cause: "bisected" | "conflict"
+  cause: "bisected" | "conflict" | "head-moved"
 ) => {
   if (context.cars.length === 0) {
     return abandon(context, at, `every car left the train (${cause})`);
@@ -568,6 +568,38 @@ export const trainMachine = setupEffect({
       },
     }),
     abandon: ({ context, event }) => abandon(context, event.at, event.reason),
+    carHeadMoved: ({ context, event }): TrainTransition => {
+      const car = context.cars.find((entry) => entry.number === event.pr);
+
+      if (
+        car?.headSha !== event.admittedHead ||
+        event.actualHead === event.admittedHead
+      ) {
+        return { context };
+      }
+
+      const reason = `car head moved from ${event.admittedHead} to ${event.actualHead}`;
+
+      if (context.intents.some((intent) => intent.kind === "Merge")) {
+        return abandon(
+          context,
+          event.at,
+          `${reason}; whole train handed back because merge already dispatched; inspect the merge before rebuilding`
+        );
+      }
+
+      const remaining = dropCars(
+        stopClock(context),
+        event.at,
+        [event.pr],
+        "head-moved",
+        reason
+      );
+
+      return remaining.cars.length === 0
+        ? abandon(remaining, event.at, reason)
+        : continueWithout(remaining, event.at, "head-moved");
+    },
     plan: ({ context, event }) => ({
       context: { ...context, landed: event.landed, plan: event.plan },
     }),

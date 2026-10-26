@@ -59,8 +59,13 @@ export const renderNotification = (
   }
 
   if ("car" in intent) {
-    const reason =
-      intent.reason === "conflict" ? vocabulary.conflict : vocabulary.bisect;
+    const reasons = {
+      conflict: vocabulary.conflict,
+      culprit: vocabulary.bisect,
+      "head-moved": "head moved",
+    };
+
+    const reason = reasons[intent.reason];
 
     return `${vocabulary.car} #${intent.car.number} left the ${vocabulary.train}: ${reason}.\n\n${intent.excerpt}`;
   }

@@ -223,7 +223,9 @@ describe("train refusals", () => {
             "landing a head nobody reviewed",
             "name the new head"
           );
-          expect(result.exit).toBe("car head moved");
+          expect(result.exit).toBe(
+            `car head moved from ${admission.car.headSha} to ${afterBuild ? "car-b" : "other-head"}`
+          );
           expect(
             test.github.writes.some((operation) =>
               operation.path.endsWith("/merge")

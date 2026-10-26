@@ -321,6 +321,7 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
         draft: controls.drafts.includes(number),
         head: { sha: head },
         labels: [],
+        mergeable: true,
         node_id: nodeOf(number),
         number,
         user: { login: car.owner },

@@ -88,6 +88,15 @@ export const admittedIntent = (
     return undefined;
   }
 
+  if (intent.kind === "NotifyOwner" && intent.reason === "conflict") {
+    return stops.Conflict({
+      detail: intent,
+      harm: "landing a car that doesn't merge onto main",
+      next: "merge main into the car, then GO it again",
+      stop: "conflict with main",
+    });
+  }
+
   if (intent.kind === "RankSuspects") {
     const failing = [...new Set(intent.failing.map((check) => check.name))]
       .toSorted()

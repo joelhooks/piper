@@ -58,7 +58,7 @@ const trainIntent = Schema.Union([
     car: CarSchema,
     excerpt: Schema.String,
     kind: Schema.Literal("NotifyOwner"),
-    reason: Schema.Literals(["conflict", "culprit"]),
+    reason: Schema.Literals(["conflict", "culprit", "head-moved"]),
   }),
   Schema.Struct({
     ...stamp,

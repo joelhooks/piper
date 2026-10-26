@@ -173,6 +173,12 @@ export const TrainEvents = {
     candidates: Schema.Array(CandidateSchema),
     main: Sha,
   }),
+  carHeadMoved: Schema.Struct({
+    actualHead: Sha,
+    admittedHead: Sha,
+    at: Millis,
+    pr: PrNumber,
+  }),
   checks: Schema.Struct({
     at: Millis,
     checks: Schema.Array(CheckRunSchema),
@@ -206,6 +212,7 @@ export const TrainEvents = {
 export const PostedEventSchema = Schema.Union([
   Schema.TaggedStruct("plan", TrainEvents.plan.fields).check(knownLandedNodes),
   Schema.TaggedStruct("candidates", TrainEvents.candidates.fields),
+  Schema.TaggedStruct("carHeadMoved", TrainEvents.carHeadMoved.fields),
   Schema.TaggedStruct("depart", TrainEvents.depart.fields),
   Schema.TaggedStruct("built", TrainEvents.built.fields),
   Schema.TaggedStruct("buildFailed", TrainEvents.buildFailed.fields),
@@ -239,6 +246,10 @@ const TrainEventSchema = Schema.Union([
   Schema.Struct({
     ...TrainEvents.candidates.fields,
     type: Schema.Literal("candidates"),
+  }),
+  Schema.Struct({
+    ...TrainEvents.carHeadMoved.fields,
+    type: Schema.Literal("carHeadMoved"),
   }),
   Schema.Struct({
     ...TrainEvents.depart.fields,
@@ -341,7 +352,7 @@ export type Intent = Stamped &
     | {
         readonly kind: "NotifyOwner";
         readonly car: Car;
-        readonly reason: "conflict" | "culprit";
+        readonly reason: "conflict" | "culprit" | "head-moved";
         readonly excerpt: string;
       }
     | {
@@ -375,14 +386,19 @@ export type Fact = { readonly at: number } & (
     }
   | {
       readonly kind: "rebuild";
-      readonly cause: "main-moved" | "merge-refused" | "bisected" | "conflict";
+      readonly cause:
+        | "main-moved"
+        | "merge-refused"
+        | "bisected"
+        | "conflict"
+        | "head-moved";
       readonly base: string;
     }
   | { readonly kind: "rerun"; readonly head: string }
   | {
       readonly kind: "dropped";
       readonly pr: number;
-      readonly reason: "conflict" | "culprit";
+      readonly reason: "conflict" | "culprit" | "head-moved";
     }
   | {
       readonly kind: "judged";
