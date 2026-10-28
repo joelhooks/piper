@@ -152,6 +152,8 @@ export class ExecutorError extends Schema.TaggedError<ExecutorError>()(
       "provider",
       "head-mismatch",
       "secondary-limit",
+      "not-retryable",
+      "refused",
       "decode",
       "interrupted",
       "storage",
