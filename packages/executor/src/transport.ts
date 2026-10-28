@@ -1,4 +1,13 @@
-import { Clock, Context, Effect, Layer, Redacted, Semaphore } from "effect";
+import {
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  Schema,
+  Semaphore,
+} from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 import { ExecutorError } from "./domain.js";
@@ -33,6 +42,57 @@ export const retryAfterDelay = (
 
   return Number.isFinite(date) ? Math.max(0, date - now) : defaultRetryAfterMs;
 };
+
+const messageLimit = 200;
+
+const ProviderBody = Schema.fromJsonString(
+  Schema.Struct({ message: Schema.String })
+);
+
+const decodeProviderBody = Schema.decodeUnknownOption(ProviderBody);
+
+const providerMessage = (body: string): string =>
+  Option.match(decodeProviderBody(body), {
+    onNone: () => "",
+    onSome: ({ message }) => message.slice(0, messageLimit),
+  });
+
+export type Refusal =
+  | { readonly code: "secondary-limit" }
+  | {
+      readonly code: "not-retryable" | "refused";
+      readonly message: string;
+    };
+
+export const classifyRefusal = (
+  status: number,
+  headers: Readonly<Record<string, string | undefined>>,
+  body: string
+): Refusal => {
+  const message = providerMessage(body);
+
+  if (
+    status === 429 ||
+    headers["retry-after"] !== undefined ||
+    headers["x-ratelimit-remaining"]?.trim() === "0" ||
+    /rate limit|abuse/iu.test(message)
+  ) {
+    return { code: "secondary-limit" };
+  }
+
+  return /cannot be (?:retried|rerun)/iu.test(message)
+    ? { code: "not-retryable", message }
+    : { code: "refused", message };
+};
+
+export const refusalFailure = (
+  refusal: Exclude<Refusal, { readonly code: "secondary-limit" }>,
+  fallback: string
+) =>
+  new ExecutorError({
+    code: refusal.code,
+    message: refusal.message === "" ? fallback : refusal.message,
+  });
 
 export class Transport extends Context.Service<
   Transport,
@@ -85,6 +145,24 @@ export class Transport extends Context.Service<
             );
 
           if (response.status === 403 || response.status === 429) {
+            const body =
+              response.status === 429
+                ? ""
+                : yield* response.text.pipe(Effect.orElseSucceed(() => ""));
+
+            const refusal = classifyRefusal(
+              response.status,
+              response.headers,
+              body
+            );
+
+            if (refusal.code !== "secondary-limit") {
+              return yield* refusalFailure(
+                refusal,
+                "Provider refused the request"
+              );
+            }
+
             const refusedAt = yield* Clock.currentTimeMillis;
 
             const retryAfterMs = Math.max(

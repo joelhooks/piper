@@ -1,7 +1,11 @@
 import { ExecutorError } from "@joelhooks/piper-executor/domain";
 import { GitHub } from "@joelhooks/piper-executor/github";
 import { TokenProvider } from "@joelhooks/piper-executor/token";
-import { retryAfterDelay } from "@joelhooks/piper-executor/transport";
+import {
+  classifyRefusal,
+  refusalFailure,
+  retryAfterDelay,
+} from "@joelhooks/piper-executor/transport";
 import {
   Clock,
   Context,
@@ -170,6 +174,21 @@ export const shadowGitHub = (intervalMs = 2000, minimum = 0.2) =>
         }
 
         if (response.status === 403 || response.status === 429) {
+          const body =
+            response.status === 429
+              ? ""
+              : yield* response.text.pipe(Effect.orElseSucceed(() => ""));
+
+          const refusal = classifyRefusal(
+            response.status,
+            response.headers,
+            body
+          );
+
+          if (refusal.code !== "secondary-limit") {
+            return yield* refusalFailure(refusal, "GitHub refused the request");
+          }
+
           const now = yield* Clock.currentTimeMillis;
 
           const retryAfterMs = Math.max(
