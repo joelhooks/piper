@@ -32,7 +32,7 @@ const transientReadRetry = Schedule.max([
     Schedule.exponential("500 millis"),
     Schedule.spaced("3 seconds"),
   ]),
-  Schedule.recurs(4),
+  Schedule.recurs(16),
 ]);
 
 const transientStatuses: ReadonlySet<number> = new Set([502, 503, 504]);

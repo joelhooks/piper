@@ -90,6 +90,18 @@ describe("transient read retry", () => {
     })
   );
 
+  it.effect("rides out a 503 blip of about 25 seconds", () =>
+    Effect.gen(function* test() {
+      const { reads, result, times } = yield* scriptedRead([
+        503, 503, 503, 503, 503, 503, 503, 503, 503, 503, 200,
+      ]);
+
+      expect(result).toEqual(Result.succeed({ sha: "synthetic-head" }));
+      expect(times.at(-1)).toBe(24_500);
+      expect(reads).toHaveLength(1);
+    })
+  );
+
   it.effect(
     "returns the transport error after the bounded retries of a persistent failure",
     () =>
@@ -105,7 +117,10 @@ describe("transient read retry", () => {
           });
         }
 
-        expect(times).toEqual([0, 500, 1500, 3500, 6500]);
+        expect(times).toEqual([
+          0, 500, 1500, 3500, 6500, 9500, 12_500, 15_500, 18_500, 21_500,
+          24_500, 27_500, 30_500, 33_500, 36_500, 39_500, 42_500,
+        ]);
         expect(reads).toEqual([]);
       })
   );
@@ -123,7 +138,7 @@ describe("transient read retry", () => {
         });
       }
 
-      expect(times).toHaveLength(5);
+      expect(times).toHaveLength(17);
     })
   );
 
