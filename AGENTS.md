@@ -50,4 +50,4 @@ Read the installed Effect `AGENTS.md` and the pinned Effect and XState source be
 
 ## Public safety and source control
 
-Keep fixtures synthetic. Do not add private records, credentials, customer identifiers, local infrastructure details, or imported repository history. Preserve existing work. Stage only this task's files. Do not stage injected local harness files. Publishing needs explicit approval of the scanned tree. A passing local gate does not authorize a push or deployment.
+Keep fixtures synthetic. Do not add private records, credentials, customer identifiers, local infrastructure details, or imported repository history. Preserve existing work. Stage only this task's files. Do not stage injected local harness files.
