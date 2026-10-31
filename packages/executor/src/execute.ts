@@ -113,6 +113,13 @@ export const workflowRun = (run: typeof ApiRun.Type): WorkflowRun => ({
   workflow: run.workflow_id,
 });
 
+const rerunnableConclusions: ReadonlySet<string> = new Set([
+  "cancelled",
+  "failure",
+  "startup_failure",
+  "timed_out",
+]);
+
 export const readChecks = Effect.fn("Executor.checks")(function* readChecks(
   repo: string,
   head: string
@@ -460,7 +467,11 @@ const executeTrain = Effect.fn("Executor.train")(function* executeTrain(
       const ids = [
         ...new Set(
           checks.flatMap((check) =>
-            check.runId === undefined ? [] : [check.runId]
+            check.runId === undefined ||
+            check.conclusion === null ||
+            !rerunnableConclusions.has(check.conclusion)
+              ? []
+              : [check.runId]
           )
         ),
       ];
@@ -468,7 +479,7 @@ const executeTrain = Effect.fn("Executor.train")(function* executeTrain(
       if (ids.length === 0) {
         return yield* new ExecutorError({
           code: "provider",
-          message: "No workflow run IDs found for rerun",
+          message: "No failed workflow run found at the head to rerun",
         });
       }
 

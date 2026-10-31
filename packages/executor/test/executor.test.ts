@@ -46,6 +46,7 @@ describe("executor intent translation", () => {
         Effect.gen(function* mapping() {
           const fixture = fake();
           fixture.controls.drafts = item.drafts ?? [];
+          fixture.controls.redHead = item.red ?? false;
 
           const outcome = yield* execute(item.job, live).pipe(
             Effect.provide(fixture.layer)
@@ -115,6 +116,7 @@ describe("executor intent translation", () => {
           }
 
           fixture.controls.drafts = item.drafts ?? [];
+          fixture.controls.redHead = item.red ?? false;
 
           const outcome = yield* execute(item.job, dry).pipe(
             Effect.provide(fixture.layer)

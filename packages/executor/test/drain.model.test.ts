@@ -147,6 +147,7 @@ const harness = (journal: Entry[], plan: RunPlan) => {
   const counts = { appends: 0, posts: 0 };
   let current: JobPlan | undefined;
   const fixture = fake();
+  fixture.controls.redHead = true;
 
   const github = Layer.effect(
     GitHub,
