@@ -12,6 +12,37 @@ import { dry, fake, HEAD, live, solo, train } from "./fakes.js";
 
 const token = Redacted.make("synthetic-token");
 
+const check = (
+  name: string,
+  id: number,
+  runId: number,
+  conclusion: "cancelled" | "skipped" | "startup_failure" | "success"
+) => ({
+  conclusion,
+  headSha: HEAD,
+  id,
+  name,
+  runId,
+  status: "completed" as const,
+});
+
+const rerunPaths = (
+  runs: readonly { readonly id: number; readonly suite: number }[],
+  checks: ReturnType<typeof check>[]
+) =>
+  Effect.gen(function* rerun() {
+    const fixture = fake();
+    fixture.controls.workflowRuns = runs;
+    fixture.controls.trainChecks = checks;
+
+    const outcome = yield* execute(
+      train({ at: 1, head: HEAD, id: "train-1/1", kind: "RerunChecks" }),
+      live
+    ).pipe(Effect.provide(fixture.layer));
+
+    return { outcome, writes: fixture.writes.map((write) => write.path) };
+  });
+
 describe("executor adapter seams", () => {
   it.effect(
     "Worker discovery decodes both outboxes and posts the exact event batch",
@@ -274,5 +305,56 @@ describe("executor adapter seams", () => {
           "/check-runs/12/rerequest",
         ]);
       })
+  );
+
+  it.effect("rerun posts only to the run holding a cancelled check", () =>
+    Effect.gen(function* cancelledBesideSkipped() {
+      const { outcome, writes } = yield* rerunPaths(
+        [
+          { id: 21, suite: 31 },
+          { id: 22, suite: 32 },
+        ],
+        [check("build", 1, 21, "cancelled"), check("gate", 2, 22, "skipped")]
+      );
+
+      expect(outcome.status).toBe("done");
+      expect(writes).toEqual(["/actions/runs/21/rerun-failed-jobs"]);
+    })
+  );
+
+  it.effect("rerun posts only to the run with a startup failure", () =>
+    Effect.gen(function* startupBesideSuccess() {
+      const { writes } = yield* rerunPaths(
+        [
+          { id: 21, suite: 31 },
+          { id: 22, suite: 32 },
+        ],
+        [
+          check("build", 1, 21, "success"),
+          check("gate", 2, 22, "startup_failure"),
+        ]
+      );
+
+      expect(writes).toEqual(["/actions/runs/22/rerun-failed-jobs"]);
+    })
+  );
+
+  it.effect("rerun posts nothing and fails typed when no run failed", () =>
+    Effect.gen(function* nothingFailed() {
+      const { outcome, writes } = yield* rerunPaths(
+        [
+          { id: 21, suite: 31 },
+          { id: 22, suite: 32 },
+        ],
+        [check("build", 1, 21, "success"), check("gate", 2, 22, "skipped")]
+      );
+
+      expect(writes).toEqual([]);
+      expect(outcome).toHaveProperty("error.code", "provider");
+      expect(outcome).toHaveProperty(
+        "error.message",
+        "No failed workflow run found at the head to rerun"
+      );
+    })
   );
 });

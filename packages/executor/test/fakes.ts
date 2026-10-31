@@ -95,6 +95,7 @@ export const cases = [
     events: [],
     job: train({ ...stamp, head: HEAD, kind: "RerunChecks" }),
     paths: ["POST /actions/runs/11/rerun-failed-jobs"],
+    red: true,
   },
   {
     drafts: [3],
@@ -194,6 +195,7 @@ interface ProviderControls {
   candidateChecks: readonly CheckRun[] | undefined;
   drafts: readonly number[];
   trainChecks: readonly CheckRun[] | undefined;
+  workflowRuns: readonly { readonly id: number; readonly suite: number }[];
 }
 
 const OpenedPull = Schema.Struct({ draft: Schema.Boolean });
@@ -216,6 +218,7 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     candidateChecks: undefined,
     drafts: [],
     trainChecks: undefined,
+    workflowRuns: [{ id: 11, suite: 10 }],
   };
 
   const controls = {
@@ -232,11 +235,15 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
     mergeRefused: false,
     moveBaseAfterBuild: false,
     moveCarAfterBuild: false,
+    redHead: false,
     refMissing: false,
     rerunGuardRealRed: false,
     runner: false,
     upToDate: true,
   };
+
+  const suiteOf = (check: CheckRun) =>
+    controls.workflowRuns.find((run) => run.id === check.runId)?.suite ?? 10;
 
   const read = Effect.fn("Fake.read")(function* read(
     _repo: string,
@@ -246,17 +253,15 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
 
     if (path.includes("/actions/runs?")) {
       return {
-        total_count: 1,
-        workflow_runs: [
-          {
-            check_suite_id: 10,
-            created_at: "2026-01-01T00:00:00Z",
-            event: "pull_request",
-            id: 11,
-            run_attempt: 2,
-            workflow_id: 1,
-          },
-        ],
+        total_count: controls.workflowRuns.length,
+        workflow_runs: controls.workflowRuns.map((run) => ({
+          check_suite_id: run.suite,
+          created_at: "2026-01-01T00:00:00Z",
+          event: "pull_request",
+          id: run.id,
+          run_attempt: 2,
+          workflow_id: run.id,
+        })),
       };
     }
 
@@ -270,7 +275,7 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
         return {
           check_runs: configured.map((check) => ({
             ...check,
-            check_suite: { id: 10 },
+            check_suite: { id: suiteOf(check) },
             conclusion:
               controls.rerunGuardRealRed &&
               head !== car.headSha &&
@@ -289,7 +294,8 @@ export const fake = (jobs: readonly Job[] = [], entries: Entry[] = []) => {
             ? [
                 {
                   check_suite: { id: 10 },
-                  conclusion: "success",
+                  conclusion:
+                    controls.redHead && head === HEAD ? "failure" : "success",
                   head_sha: head,
                   id: 12,
                   name: "unit",
