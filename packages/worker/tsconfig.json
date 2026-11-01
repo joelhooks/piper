@@ -8,6 +8,6 @@
       }
     ]
   },
-  "include": ["plan.ts"],
+  "include": ["scripts/plan.ts"],
   "exclude": []
 }

@@ -64,7 +64,7 @@
   },
   "exclude": [
     "packages/*/test/**",
-    "packages/worker/plan.ts",
+    "packages/worker/scripts/plan.ts",
     "packages/executor/**",
     "packages/shadow/**",
     "packages/observe/**"
