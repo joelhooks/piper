@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "plan": "rolldown src/index.ts --file .alchemy/worker.mjs --platform browser --format esm && tsx plan.ts"
+    "plan": "rolldown src/index.ts --file .alchemy/worker.mjs --platform browser --format esm && tsx scripts/plan.ts"
   },
   "dependencies": {
     "@joelhooks/piper": "workspace:*",

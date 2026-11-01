@@ -6,7 +6,7 @@ import { evalStack } from "alchemy/Stack";
 import { inMemoryState } from "alchemy/State/InMemoryState";
 import { ConfigProvider, Console, Effect, Layer } from "effect";
 
-import stack from "./alchemy.run.js";
+import stack from "../alchemy.run.js";
 
 const dryRun = evalStack(
   stack,
