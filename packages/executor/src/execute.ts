@@ -82,6 +82,7 @@ const Ref = Schema.Struct({ object: ShaResponse });
 const ApiCheck = Schema.Struct({
   ...CheckRunSchema.fields,
   check_suite: Schema.optionalKey(Schema.Struct({ id: Schema.Int })),
+  completed_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
   headSha: Schema.optionalKey(Schema.String),
   head_sha: Schema.String,
 });
@@ -97,6 +98,7 @@ const ApiRun = Schema.Struct({
   event: Schema.String,
   id: Schema.Int,
   run_attempt: Schema.Int,
+  status: Schema.optionalKey(Schema.String),
   workflow_id: Schema.Int,
 });
 
@@ -189,11 +191,18 @@ export const readChecks = Effect.fn("Executor.checks")(function* readChecks(
       (item) => item.check_suite_id === check.suite
     );
 
+    const concludedInCompletedRun =
+      check.status !== "completed" &&
+      check.conclusion !== null &&
+      check.completed_at !== undefined &&
+      check.completed_at !== null &&
+      run?.status === "completed";
+
     const observation = {
       conclusion: check.conclusion,
       headSha: head,
       name: check.name,
-      status: check.status,
+      status: concludedInCompletedRun ? ("completed" as const) : check.status,
     };
 
     const attempted =
