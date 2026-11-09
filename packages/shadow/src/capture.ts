@@ -261,7 +261,11 @@ export const capturePoll = Effect.fn("Shadow.capturePoll")(
       (event) => !Predicate.isTagged(event, "plan")
     );
 
-    if (previous === undefined) {
+    if (
+      previous === undefined ||
+      (previous.view.state === "collecting" &&
+        previous.view.directWait !== undefined)
+    ) {
       events.push(posted.depart({ at }), ...operatorEvents);
     } else {
       const lookup = Effect.gen(function* lookup() {

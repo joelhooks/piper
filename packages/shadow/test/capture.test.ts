@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { ExecutorError } from "@joelhooks/piper-executor/domain";
 import { GitHub } from "@joelhooks/piper-executor/github";
 import type { PostedEvent } from "@joelhooks/piper/domain";
-import { Data, Effect } from "effect";
+import { Data, Effect, Predicate } from "effect";
 
 import { capturePoll, captureReads } from "../src/capture.js";
 import type { ActionValues, RawRead, Recording, Trace } from "../src/domain.js";
@@ -200,6 +200,155 @@ const scenario = Effect.fn("Test.captureScenario")(function* scenario({
 });
 
 describe("capture poll ordering", () => {
+  for (const enabled of [false, true]) {
+    it.effect(
+      `collecting polls without an active wait stay tick-only with the rule ${enabled ? "enabled" : "absent"}`,
+      () =>
+        Effect.gen(function* defaultCollectingPoll() {
+          const capture = (recording: Recording, at: number) => {
+            const reads: RawRead[] = [];
+
+            return capturePoll(recording, 2, at, [], reads).pipe(
+              Effect.provideService(
+                GitHub,
+                captureReads(github(responses), reads)
+              ),
+              Effect.provideService(GitHubFeed, {
+                poll: (config, now) =>
+                  now === start
+                    ? Effect.succeed([
+                        posted.candidates({
+                          at: now,
+                          candidates: [],
+                          main: "main-a",
+                        }),
+                      ])
+                    : feed.poll(config, now),
+              }),
+              Effect.provideService(OperatorTrace, {
+                read: () => Effect.succeed(initial.trace),
+              })
+            );
+          };
+
+          const first = yield* capture(
+            enabled
+              ? {
+                  ...initial,
+                  input: { ...initial.input, directWaitChecks: ["unit"] },
+                }
+              : initial,
+            start
+          );
+
+          expect(first.report.view.state).toBe("collecting");
+
+          const second = yield* capture(first.recording, start + 60_000);
+
+          expect(second.report.view.state).toBe("collecting");
+          expect(
+            second.recording.frames
+              .at(-1)
+              ?.events.some(Predicate.isTagged("depart"))
+          ).toBe(false);
+        })
+    );
+  }
+
+  for (const completes of [true, false]) {
+    it.effect(
+      `reposts fresh candidates while held, then ${completes ? "lands directly" : "boards at expiry"}`,
+      () =>
+        Effect.gen(function* waitingCapture() {
+          const waitingFeed: GitHubFeed["Service"] = {
+            poll: (_input, at) =>
+              Effect.succeed([
+                posted.candidates({
+                  at,
+                  candidates: [
+                    {
+                      checks: [
+                        {
+                          conclusion:
+                            completes && at >= start + 60_000
+                              ? "success"
+                              : null,
+                          headSha: "car-a",
+                          name: "unit",
+                          status:
+                            completes && at >= start + 60_000
+                              ? "completed"
+                              : "in_progress",
+                        },
+                      ],
+                      headSha: "car-a",
+                      labels: ["train"],
+                      number: 1,
+                      operatorReviewed: true,
+                      owner: "synthetic-author",
+                      upToDate: true,
+                    },
+                  ],
+                  main: "main-a",
+                }),
+              ]),
+          };
+
+          const capture = (recording: Recording, at: number) => {
+            const reads: RawRead[] = [];
+
+            return capturePoll(recording, 2, at, [], reads).pipe(
+              Effect.provideService(
+                GitHub,
+                captureReads(github(responses), reads)
+              ),
+              Effect.provideService(GitHubFeed, waitingFeed),
+              Effect.provideService(OperatorTrace, {
+                read: () => Effect.succeed(initial.trace),
+              })
+            );
+          };
+
+          const first = yield* capture(
+            {
+              ...initial,
+              input: {
+                ...initial.input,
+                ciTimeoutMs: 60_000,
+                directRequiredChecks: [["unit"]],
+                directWaitChecks: ["unit"],
+              },
+            },
+            start
+          );
+
+          expect(first.report.view.state).toBe("collecting");
+          expect(first.report.view.directWait?.since).toBe(start);
+          expect(first.report.expected).toEqual([]);
+          const middle = yield* capture(first.recording, start + 30_000);
+
+          expect(middle.report.view.state).toBe("collecting");
+          expect(middle.report.view.directWait?.since).toBe(
+            first.report.view.directWait?.since
+          );
+          expect(middle.report.expected).toEqual([]);
+          expect(middle.report.journal).toEqual([]);
+
+          const second = yield* capture(middle.recording, start + 60_000);
+          expect(
+            second.recording.frames.at(-1)?.events.map((event) => event._tag)
+          ).toEqual(["candidates", "depart"]);
+          expect(second.report.view.state).toBe(
+            completes ? "direct.awaitingGo" : "building"
+          );
+          expect(second.report.expected.map((action) => action.kind)).toEqual(
+            completes ? [] : ["BuildTrain"]
+          );
+          expect(yield* runRecording(second.recording)).toEqual(second.report);
+        })
+    );
+  }
+
   it.effect(
     "auto GO predicts a merge before the same poll observes main moving",
     () =>

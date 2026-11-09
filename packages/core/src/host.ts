@@ -94,6 +94,7 @@ export const viewTrain = (snapshot: TrainSnapshot) => {
     build: context.build,
     cars: context.cars,
     checks: context.checks,
+    directWait: context.directWait,
     dropped: context.dropped,
     facts: context.facts,
     go: context.go,

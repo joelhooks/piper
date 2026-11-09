@@ -18,6 +18,7 @@ import type {
 } from "./domain.js";
 import { TrainEvents, TrainInputSchema } from "./domain.js";
 import type { Plan } from "./plan.js";
+import type { Departure } from "./policy.js";
 import {
   departure,
   excerptOf,
@@ -69,6 +70,17 @@ export interface TrainContext {
   readonly candidateIgnoredChecks?: readonly string[];
   readonly candidateRequiredChecks?: readonly (readonly string[])[];
   readonly directRequiredChecks?: readonly (readonly string[])[];
+  readonly directWaitChecks?: readonly string[];
+  readonly directWaitMs?: number;
+  readonly directWait:
+    | {
+        readonly pr: number;
+        readonly head: string;
+        readonly since: number;
+        readonly reason: string;
+        readonly waitingFor?: string;
+      }
+    | undefined;
   readonly requireUpToDate?: boolean;
   readonly sharedBoarding?: SharedBoarding;
   readonly train: number;
@@ -132,6 +144,29 @@ type TrainTransition =
 const REJECTIONS_KEPT = 50;
 
 const branchOf = (context: TrainContext) => `train/${context.train}`;
+
+const durationOf = (ms: number): string =>
+  ms % 60_000 === 0 ? `${ms / 60_000} min` : `${Math.ceil(ms / 1000)} s`;
+
+const departureReason = (
+  decision: Departure,
+  wait: TrainContext["directWait"],
+  at: number,
+  bound: string
+): string => {
+  if (decision.path === "wait") {
+    return `${decision.reason} did not finish within ${bound}; boarding a lone train`;
+  }
+
+  if (wait === undefined) {
+    return decision.reason;
+  }
+
+  const action =
+    decision.path === "direct-land" ? "landed directly" : "departed";
+
+  return `${decision.reason}; ${action} after waiting ${durationOf(at - wait.since)} for ${wait.waitingFor ?? "its own CI"}`;
+};
 
 const emit = (
   context: TrainContext,
@@ -529,6 +564,9 @@ export const trainMachine = setupEffect({
     ciDeadlineAt: undefined,
     ciTimeoutMs: input.ciTimeoutMs,
     directRequiredChecks: input.directRequiredChecks ?? [],
+    directWait: undefined,
+    directWaitChecks: input.directWaitChecks ?? [],
+    directWaitMs: input.directWaitMs ?? input.ciTimeoutMs,
     dropped: [],
     facts: [],
     go: undefined,
@@ -864,7 +902,7 @@ export const trainMachine = setupEffect({
           context: { ...context, main: event.main, pool: event.candidates },
         }),
         depart: ({ context, event }): TrainTransition => {
-          const chosen = departure(
+          const decision = departure(
             context.pool,
             context.maxCars,
             context,
@@ -872,18 +910,56 @@ export const trainMachine = setupEffect({
             new Set(context.landed)
           );
 
-          const [car] = chosen?.cars ?? [];
+          const [car] = decision?.cars ?? [];
 
           if (
             context.main === undefined ||
-            chosen === undefined ||
+            decision === undefined ||
             car === undefined
           ) {
-            return undefined;
+            return context.directWait === undefined
+              ? undefined
+              : { context: { ...context, directWait: undefined } };
           }
 
+          const { directWait } = context;
+
+          const previousWait =
+            directWait?.pr === car.number && directWait.head === car.headSha
+              ? directWait
+              : undefined;
+
+          const since = previousWait?.since ?? event.at;
+
+          const timeoutMs = context.directWaitMs ?? context.ciTimeoutMs;
+          const bound = durationOf(timeoutMs);
+
+          if (decision.path === "wait" && event.at - since < timeoutMs) {
+            return {
+              context: {
+                ...context,
+                directWait: {
+                  head: car.headSha,
+                  pr: car.number,
+                  reason: `waiting up to ${bound} for ${decision.reason} to finish before landing directly`,
+                  since,
+                  waitingFor: decision.reason,
+                },
+              },
+            };
+          }
+
+          const chosen = {
+            ...decision,
+            path:
+              decision.path === "wait"
+                ? ("lone-board" as const)
+                : decision.path,
+            reason: departureReason(decision, previousWait, event.at, bound),
+          };
+
           const departed = record(
-            { ...context, cars: chosen.cars },
+            { ...context, cars: chosen.cars, directWait: undefined },
             {
               at: event.at,
               base: context.main,

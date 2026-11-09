@@ -271,11 +271,18 @@ const depart = Effect.fn("Train.depart")(function* depart({
   return go.length === 0 ? departed : yield* stepTrain(departed, go);
 });
 
-const tick = ({ admission, at, snapshot, train }: PollObservation) =>
-  stepTrain(train, [
-    { at, type: "tick" },
-    ...goFor(admission, at, snapshot.context.head),
-  ]);
+const tick = (observation: PollObservation) =>
+  stateName(observation.snapshot) === "collecting" &&
+  observation.snapshot.context.directWait !== undefined
+    ? depart(observation)
+    : stepTrain(observation.train, [
+        { at: observation.at, type: "tick" },
+        ...goFor(
+          observation.admission,
+          observation.at,
+          observation.snapshot.context.head
+        ),
+      ]);
 
 const poll = Effect.fn("Train.poll")(function* poll(
   context: RunnerContext,

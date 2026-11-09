@@ -33,6 +33,10 @@ export interface RepoRules {
 
   readonly directRequiredChecks?: readonly (readonly string[])[];
 
+  readonly directWaitChecks?: readonly string[];
+
+  readonly directWaitMs?: number;
+
   readonly requireUpToDate?: boolean;
 
   readonly sharedBoarding?: SharedBoarding;
@@ -252,7 +256,8 @@ const listed = (names: readonly string[]) =>
 
 const directGap = (
   candidate: Candidate,
-  rules: RepoRules
+  rules: RepoRules,
+  waiting: readonly string[] = []
 ): string | undefined => {
   const required = rules.directRequiredChecks ?? [];
 
@@ -274,13 +279,24 @@ const directGap = (
     return `its own CI is red on ${listed(verdict.failing.map((run) => run.name))}`;
   }
 
-  if (Predicate.isTagged(verdict, "Pending")) {
+  const runs = runsOn(candidate);
+
+  if (
+    Predicate.isTagged(verdict, "Pending") &&
+    (waiting.length === 0 ||
+      runs.some(
+        (run) =>
+          !rules.ignoredChecks.includes(run.name) &&
+          !waiting.includes(run.name) &&
+          run.status !== "completed"
+      ))
+  ) {
     return "its own CI has not finished";
   }
 
-  const runs = runsOn(candidate);
-
-  const missing = required.flat().filter((name) => !succeeded(runs, name));
+  const missing = required
+    .flat()
+    .filter((name) => !waiting.includes(name) && !succeeded(runs, name));
 
   return missing.length === 0
     ? undefined
@@ -369,7 +385,7 @@ export const selectCars = (
 
 export interface Departure {
   readonly cars: readonly Car[];
-  readonly path: DeparturePath;
+  readonly path: DeparturePath | "wait";
   readonly reason: string;
 }
 
@@ -400,6 +416,21 @@ export const departure = (
   }
 
   const gap = directGap(lead, rules);
+  const runs = runsOn(lead);
+
+  const waiting = (rules.directWaitChecks ?? []).filter(
+    (name) =>
+      !rules.ignoredChecks.includes(name) &&
+      runs.some((run) => run.name === name && run.status !== "completed")
+  );
+
+  if (waiting.length > 0 && directGap(lead, rules, waiting) === undefined) {
+    return {
+      cars,
+      path: "wait",
+      reason: listed(waiting),
+    };
+  }
 
   return gap === undefined
     ? {
