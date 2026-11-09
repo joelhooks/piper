@@ -264,7 +264,7 @@ export const capturePoll = Effect.fn("Shadow.capturePoll")(
     if (
       previous === undefined ||
       (previous.view.state === "collecting" &&
-        (input.directWaitChecks?.length ?? 0) > 0)
+        previous.view.directWait !== undefined)
     ) {
       events.push(posted.depart({ at }), ...operatorEvents);
     } else {

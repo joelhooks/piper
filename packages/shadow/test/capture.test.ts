@@ -200,50 +200,60 @@ const scenario = Effect.fn("Test.captureScenario")(function* scenario({
 });
 
 describe("capture poll ordering", () => {
-  it.effect(
-    "without the rule collecting polls do not send another depart",
-    () =>
-      Effect.gen(function* defaultCollectingPoll() {
-        const capture = (recording: Recording, at: number) => {
-          const reads: RawRead[] = [];
+  for (const enabled of [false, true]) {
+    it.effect(
+      `collecting polls without an active wait stay tick-only with the rule ${enabled ? "enabled" : "absent"}`,
+      () =>
+        Effect.gen(function* defaultCollectingPoll() {
+          const capture = (recording: Recording, at: number) => {
+            const reads: RawRead[] = [];
 
-          return capturePoll(recording, 2, at, [], reads).pipe(
-            Effect.provideService(
-              GitHub,
-              captureReads(github(responses), reads)
-            ),
-            Effect.provideService(GitHubFeed, {
-              poll: (config, now) =>
-                now === start
-                  ? Effect.succeed([
-                      posted.candidates({
-                        at: now,
-                        candidates: [],
-                        main: "main-a",
-                      }),
-                    ])
-                  : feed.poll(config, now),
-            }),
-            Effect.provideService(OperatorTrace, {
-              read: () => Effect.succeed(initial.trace),
-            })
+            return capturePoll(recording, 2, at, [], reads).pipe(
+              Effect.provideService(
+                GitHub,
+                captureReads(github(responses), reads)
+              ),
+              Effect.provideService(GitHubFeed, {
+                poll: (config, now) =>
+                  now === start
+                    ? Effect.succeed([
+                        posted.candidates({
+                          at: now,
+                          candidates: [],
+                          main: "main-a",
+                        }),
+                      ])
+                    : feed.poll(config, now),
+              }),
+              Effect.provideService(OperatorTrace, {
+                read: () => Effect.succeed(initial.trace),
+              })
+            );
+          };
+
+          const first = yield* capture(
+            enabled
+              ? {
+                  ...initial,
+                  input: { ...initial.input, directWaitChecks: ["unit"] },
+                }
+              : initial,
+            start
           );
-        };
 
-        const first = yield* capture(initial, start);
+          expect(first.report.view.state).toBe("collecting");
 
-        expect(first.report.view.state).toBe("collecting");
+          const second = yield* capture(first.recording, start + 60_000);
 
-        const second = yield* capture(first.recording, start + 60_000);
-
-        expect(second.report.view.state).toBe("collecting");
-        expect(
-          second.recording.frames
-            .at(-1)
-            ?.events.some(Predicate.isTagged("depart"))
-        ).toBe(false);
-      })
-  );
+          expect(second.report.view.state).toBe("collecting");
+          expect(
+            second.recording.frames
+              .at(-1)
+              ?.events.some(Predicate.isTagged("depart"))
+          ).toBe(false);
+        })
+    );
+  }
 
   for (const completes of [true, false]) {
     it.effect(
@@ -260,11 +270,13 @@ describe("capture poll ordering", () => {
                       checks: [
                         {
                           conclusion:
-                            completes && at > start ? "success" : null,
+                            completes && at >= start + 60_000
+                              ? "success"
+                              : null,
                           headSha: "car-a",
                           name: "unit",
                           status:
-                            completes && at > start
+                            completes && at >= start + 60_000
                               ? "completed"
                               : "in_progress",
                         },
@@ -311,8 +323,18 @@ describe("capture poll ordering", () => {
           );
 
           expect(first.report.view.state).toBe("collecting");
+          expect(first.report.view.directWait?.since).toBe(start);
           expect(first.report.expected).toEqual([]);
-          const second = yield* capture(first.recording, start + 60_000);
+          const middle = yield* capture(first.recording, start + 30_000);
+
+          expect(middle.report.view.state).toBe("collecting");
+          expect(middle.report.view.directWait?.since).toBe(
+            first.report.view.directWait?.since
+          );
+          expect(middle.report.expected).toEqual([]);
+          expect(middle.report.journal).toEqual([]);
+
+          const second = yield* capture(middle.recording, start + 60_000);
           expect(
             second.recording.frames.at(-1)?.events.map((event) => event._tag)
           ).toEqual(["candidates", "depart"]);

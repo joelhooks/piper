@@ -18,6 +18,7 @@ import type {
 } from "./domain.js";
 import { TrainEvents, TrainInputSchema } from "./domain.js";
 import type { Plan } from "./plan.js";
+import type { Departure } from "./policy.js";
 import {
   departure,
   excerptOf,
@@ -77,6 +78,7 @@ export interface TrainContext {
         readonly head: string;
         readonly since: number;
         readonly reason: string;
+        readonly waitingFor?: string;
       }
     | undefined;
   readonly requireUpToDate?: boolean;
@@ -142,6 +144,29 @@ type TrainTransition =
 const REJECTIONS_KEPT = 50;
 
 const branchOf = (context: TrainContext) => `train/${context.train}`;
+
+const durationOf = (ms: number): string =>
+  ms % 60_000 === 0 ? `${ms / 60_000} min` : `${Math.ceil(ms / 1000)} s`;
+
+const departureReason = (
+  decision: Departure,
+  wait: TrainContext["directWait"],
+  at: number,
+  bound: string
+): string => {
+  if (decision.path === "wait") {
+    return `${decision.reason} did not finish within ${bound}; boarding a lone train`;
+  }
+
+  if (wait === undefined) {
+    return decision.reason;
+  }
+
+  const action =
+    decision.path === "direct-land" ? "landed directly" : "departed";
+
+  return `${decision.reason}; ${action} after waiting ${durationOf(at - wait.since)} for ${wait.waitingFor ?? "its own CI"}`;
+};
 
 const emit = (
   context: TrainContext,
@@ -571,22 +596,15 @@ export const trainMachine = setupEffect({
   id: "train",
   initial: "collecting",
   on: {
-    "*": ({ context, event, value }) =>
-      event.type === "depart" && (context.directWaitChecks?.length ?? 0) > 0
-        ? undefined
-        : {
-            context: {
-              ...context,
-              rejected: [
-                ...context.rejected,
-                {
-                  at: timeOf(event),
-                  state: rejectedState(value),
-                  type: event.type,
-                },
-              ].slice(-REJECTIONS_KEPT),
-            },
-          },
+    "*": ({ context, event, value }) => ({
+      context: {
+        ...context,
+        rejected: [
+          ...context.rejected,
+          { at: timeOf(event), state: rejectedState(value), type: event.type },
+        ].slice(-REJECTIONS_KEPT),
+      },
+    }),
     abandon: ({ context, event }) => abandon(context, event.at, event.reason),
     carHeadMoved: ({ context, event }): TrainTransition => {
       const car = context.cars.find((entry) => entry.number === event.pr);
@@ -880,24 +898,9 @@ export const trainMachine = setupEffect({
     },
     collecting: {
       on: {
-        candidates: ({ context, event }) => {
-          const wait = context.directWait;
-
-          const sameCar = event.candidates.every(
-            (candidate) =>
-              candidate.number === wait?.pr && candidate.headSha === wait.head
-          );
-
-          return {
-            context: {
-              ...context,
-              directWait:
-                sameCar && event.candidates.length > 0 ? wait : undefined,
-              main: event.main,
-              pool: event.candidates,
-            },
-          };
-        },
+        candidates: ({ context, event }) => ({
+          context: { ...context, main: event.main, pool: event.candidates },
+        }),
         depart: ({ context, event }): TrainTransition => {
           const decision = departure(
             context.pool,
@@ -921,13 +924,15 @@ export const trainMachine = setupEffect({
 
           const { directWait } = context;
 
-          const since =
+          const previousWait =
             directWait?.pr === car.number && directWait.head === car.headSha
-              ? directWait.since
-              : event.at;
+              ? directWait
+              : undefined;
+
+          const since = previousWait?.since ?? event.at;
 
           const timeoutMs = context.directWaitMs ?? context.ciTimeoutMs;
-          const bound = `${timeoutMs / 60_000} min`;
+          const bound = durationOf(timeoutMs);
 
           if (decision.path === "wait" && event.at - since < timeoutMs) {
             return {
@@ -938,6 +943,7 @@ export const trainMachine = setupEffect({
                   pr: car.number,
                   reason: `waiting up to ${bound} for ${decision.reason} to finish before landing directly`,
                   since,
+                  waitingFor: decision.reason,
                 },
               },
             };
@@ -949,10 +955,7 @@ export const trainMachine = setupEffect({
               decision.path === "wait"
                 ? ("lone-board" as const)
                 : decision.path,
-            reason:
-              decision.path === "wait"
-                ? `${decision.reason} did not finish within ${bound}; boarding a lone train`
-                : decision.reason,
+            reason: departureReason(decision, previousWait, event.at, bound),
           };
 
           const departed = record(

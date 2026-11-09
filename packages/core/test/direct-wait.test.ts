@@ -114,6 +114,7 @@ describe("direct landing waits", () => {
           reason:
             "waiting up to 1 min for gate to finish before landing directly",
           since: T0,
+          waitingFor: "gate",
         });
         const restored = jsonSnapshot(held);
 
@@ -136,6 +137,9 @@ describe("direct landing waits", () => {
         expect(green.context.facts).toContainEqual(
           expect.objectContaining({ path: "direct-land" })
         );
+        expect(
+          green.context.facts.find((fact) => fact.kind === "departed")?.reason
+        ).toContain("landed directly after waiting 40 s for gate");
       })
   );
 
@@ -269,7 +273,7 @@ describe("direct landing waits", () => {
   );
 
   it.effect(
-    "new heads, different cars, and non-lone pools clear the wait immediately",
+    "departure decisions reset the wait on new heads, different cars and non-lone pools",
     () =>
       Effect.gen(function* test() {
         for (const pool of [
@@ -289,17 +293,20 @@ describe("direct landing waits", () => {
         ]) {
           const held = yield* start();
           const changed = yield* stepTrain(held, [collect(pool, T0 + 30_000)]);
-          expect(
-            (yield* readTrain(changed)).context.directWait
-          ).toBeUndefined();
+
+          expect((yield* readTrain(changed)).context.directWait?.since).toBe(
+            T0
+          );
+
+          const reconsidered = yield* readTrain(
+            yield* stepTrain(changed, [{ at: T0 + 60_000, type: "depart" }])
+          );
 
           if (pool.length === 1) {
-            const waiting = yield* readTrain(
-              yield* stepTrain(changed, [{ at: T0 + 60_000, type: "depart" }])
-            );
-
-            expect(stateName(waiting)).toBe("collecting");
-            expect(waiting.context.directWait?.since).toBe(T0 + 60_000);
+            expect(stateName(reconsidered)).toBe("collecting");
+            expect(reconsidered.context.directWait?.since).toBe(T0 + 60_000);
+          } else {
+            expect(reconsidered.context.directWait).toBeUndefined();
           }
         }
       })
@@ -343,37 +350,44 @@ describe("direct landing waits", () => {
     })
   );
 
-  it.effect("repeated depart is a no-op only with the rule enabled", () =>
-    Effect.gen(function* test() {
-      for (const directWaitChecks of [[], ["gate"]]) {
-        const train = yield* start(
-          [candidate([check("build"), check("gate")])],
-          { ...rules, directWaitChecks }
-        );
+  it.effect(
+    "repeated depart keeps its rejection even with the rule enabled",
+    () =>
+      Effect.gen(function* test() {
+        for (const directWaitChecks of [[], ["gate"]]) {
+          for (const direct of [true, false]) {
+            const train = yield* start(
+              [candidate([check("build"), check("gate")])],
+              {
+                ...rules,
+                directRequiredChecks: direct ? [["build"], ["gate"]] : [],
+                directWaitChecks,
+              }
+            );
 
-        const before = yield* readTrain(train);
+            const before = yield* readTrain(train);
 
-        const after = yield* readTrain(
-          yield* stepTrain(train, [{ at: T0 + 1, type: "depart" }])
-        );
+            const after = yield* readTrain(
+              yield* stepTrain(train, [{ at: T0 + 1, type: "depart" }])
+            );
 
-        expect(after.context).toEqual({
-          ...before.context,
-          rejected:
-            directWaitChecks.length === 0
-              ? [
-                  {
-                    at: T0 + 1,
-                    state: JSON.stringify({ direct: "awaitingGo" }),
-                    type: "depart",
-                  },
-                ]
-              : before.context.rejected,
-          sync: after.context.sync,
-        });
-        expect(stateName(after)).toBe(stateName(before));
-      }
-    })
+            expect(after.context).toEqual({
+              ...before.context,
+              rejected: [
+                {
+                  at: T0 + 1,
+                  state: direct
+                    ? JSON.stringify({ direct: "awaitingGo" })
+                    : "building",
+                  type: "depart",
+                },
+              ],
+              sync: after.context.sync,
+            });
+            expect(stateName(after)).toBe(stateName(before));
+          }
+        }
+      })
   );
 
   it.effect(
@@ -475,6 +489,79 @@ describe("direct landing waits", () => {
           );
         }
       })
+  );
+
+  it.effect(
+    "an ineligible duplicate entry cannot restart the selected car's wait",
+    () =>
+      Effect.gen(function* duplicateEntry() {
+        const pool = [
+          candidate(),
+          { ...candidate(), headSha: "other", operatorReviewed: false },
+        ];
+
+        const held = yield* start(pool);
+
+        const middle = yield* stepTrain(held, [
+          collect(pool, T0 + 30_000),
+          { at: T0 + 30_000, type: "depart" },
+        ]);
+
+        expect((yield* readTrain(middle)).context.directWait?.since).toBe(T0);
+
+        const expired = yield* readTrain(
+          yield* stepTrain(middle, [
+            collect(pool, T0 + 60_000),
+            { at: T0 + 60_000, type: "depart" },
+          ])
+        );
+
+        expect(stateName(expired)).toBe("building");
+        expect(expired.context.facts).toContainEqual(
+          expect.objectContaining({ path: "lone-board" })
+        );
+      })
+  );
+
+  it.effect(
+    "a distinct ineligible extra PR keeps the shared group policy",
+    () =>
+      Effect.gen(function* sharedGroup() {
+        const snapshot = yield* readTrain(
+          yield* start([
+            candidate([check("build"), check("gate")]),
+            { ...candidate(), number: 2, operatorReviewed: false },
+          ])
+        );
+
+        expect(snapshot.context.directWait).toBeUndefined();
+        expect(snapshot.context.facts).toContainEqual(
+          expect.objectContaining({ cars: [1], path: "train" })
+        );
+      })
+  );
+
+  it.effect("non-minute bounds use whole seconds without long decimals", () =>
+    Effect.gen(function* oddBound() {
+      const held = yield* start([candidate()], {
+        ...rules,
+        directWaitMs: 90_000,
+      });
+
+      expect((yield* readTrain(held)).context.directWait?.reason).toBe(
+        "waiting up to 90 s for gate to finish before landing directly"
+      );
+
+      const expired = yield* readTrain(
+        yield* stepTrain(held, [{ at: T0 + 90_000, type: "depart" }])
+      );
+
+      expect(expired.context.facts).toContainEqual(
+        expect.objectContaining({
+          reason: "gate did not finish within 90 s; boarding a lone train",
+        })
+      );
+    })
   );
 
   it.effect("admission parsing preserves the optional rule", () =>

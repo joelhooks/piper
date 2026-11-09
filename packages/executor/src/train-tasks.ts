@@ -273,7 +273,7 @@ const depart = Effect.fn("Train.depart")(function* depart({
 
 const tick = (observation: PollObservation) =>
   stateName(observation.snapshot) === "collecting" &&
-  (observation.admission.input.directWaitChecks?.length ?? 0) > 0
+  observation.snapshot.context.directWait !== undefined
     ? depart(observation)
     : stepTrain(observation.train, [
         { at: observation.at, type: "tick" },

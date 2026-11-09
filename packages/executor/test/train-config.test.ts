@@ -80,6 +80,7 @@ const handWritten = Arbitrary.schema(
       candidateRequiredChecks: Schema.optionalKey(Groups),
       directRequiredChecks: Schema.optionalKey(Groups),
       directWaitChecks: Schema.optionalKey(Schema.Array(Name)),
+      directWaitMs: TrainInputSchema.fields.directWaitMs.schema,
       ignoredChecks: Schema.Array(Name),
       trainLabel: Name,
     }),
