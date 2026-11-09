@@ -133,6 +133,8 @@ export const TrainInputSchema = Schema.Struct({
   directRequiredChecks: Schema.optionalKey(
     Schema.Array(Schema.NonEmptyArray(Schema.String))
   ),
+  directWaitChecks: Schema.optionalKey(Schema.Array(Schema.String)),
+  directWaitMs: Schema.optionalKey(Millis),
   ignoredChecks: Schema.Array(Schema.String),
   maxCars: MaxCars,
   pollMs: PollMs,

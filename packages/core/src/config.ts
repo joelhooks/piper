@@ -6,6 +6,7 @@ import {
   PollMs,
   PrNumber,
   SharedBoardingSchema,
+  TrainInputSchema,
 } from "./domain.js";
 import { isGlob } from "./glob.js";
 import {
@@ -143,6 +144,8 @@ const MergeLine = Schema.Struct({
     {}
   ),
   ciTimeoutMs: orDefault(CiTimeoutMs, DEFAULT_CI_TIMEOUT_MS),
+  directWaitChecks: Schema.optionalKey(Schema.Array(Text)),
+  directWaitMs: TrainInputSchema.fields.directWaitMs,
   excluded: orDefault(Schema.Array(PrNumber), []),
   labels: orDefault(Labels, {}),
   maxCars: orDefault(MaxCars, DEFAULT_CARS),

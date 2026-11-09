@@ -13,7 +13,7 @@ export const trainAdmission = (
 ): TrainAdmission => {
   const name = `${repo.owner}/${repo.name}`;
 
-  return {
+  const admission: TrainAdmission = {
     baseBranch: repo.base,
     car,
     goBy,
@@ -36,4 +36,22 @@ export const trainAdmission = (
     tokenCommand,
     train,
   };
+
+  const withChecks =
+    mergeLine.directWaitChecks === undefined
+      ? admission
+      : {
+          ...admission,
+          input: {
+            ...admission.input,
+            directWaitChecks: mergeLine.directWaitChecks,
+          },
+        };
+
+  return mergeLine.directWaitMs === undefined
+    ? withChecks
+    : {
+        ...withChecks,
+        input: { ...withChecks.input, directWaitMs: mergeLine.directWaitMs },
+      };
 };
